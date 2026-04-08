@@ -44,8 +44,6 @@
 #include "zetasql/public/function_signature.h"
 #include "zetasql/public/types/type.h"
 #include "zetasql/resolved_ast/resolved_ast.h"
-#include "absl/base/attributes.h"
-#include "absl/base/const_init.h"
 #include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -53,7 +51,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "third_party/spanner_pg/catalog/builtin_function.h"
 #include "third_party/spanner_pg/catalog/function.h"
@@ -69,9 +66,6 @@ typedef std::pair<const zetasql::Function*,
                   const zetasql::FunctionSignature*>
     FunctionSigPair;
 
-ABSL_CONST_INIT static absl::Mutex engine_system_catalog_mutex(
-    absl::kConstInit);
-
 // An abstract class for catalogs which store the PostgresTypeMappings
 // and PostgresExtendedFunctions for a storage engine. Instances of the derived
 // classes should be populated in the constructor and never modified.
@@ -79,9 +73,9 @@ ABSL_CONST_INIT static absl::Mutex engine_system_catalog_mutex(
 // EngineSystemCatalog can be expensive to initialize because it maps most
 // function signatures to a PostgreSQL oid and to a builtin function signature.
 // Storage engines which expect to use the same system catalog objects across
-// queries should use GetEngineSystemCatalogPtr() to initialize the
-// EngineSystemCatalog singleton before or during the first query, and then use
-// GetEngineSystemCatalog() to access the EngineSystemCatalog singleton.
+// queries should initialize the SpangresSystemCatalog singleton before or
+// during the first query, and then use GetEngineSystemCatalog() to access the
+// SpangresSystemCatalog singleton.
 //
 // All virtual FindX methods from the zetasql::Catalog class besides
 // FindType and FindFunction will throw an error.
@@ -463,12 +457,6 @@ class EngineSystemCatalog : public zetasql::EnumerableCatalog {
       std::unique_ptr<EngineBuiltinFunctionCatalog> builtin_function_catalog)
       : name_(name),
         builtin_function_catalog_(std::move(builtin_function_catalog)) {}
-
-  // Defines the EngineSystemCatalog singleton.
-  // Used by GetEngineSystemCatalog to read the singleton.
-  // Also used by the derived classes to access and override the singleton.
-  static EngineSystemCatalog** GetEngineSystemCatalogPtr()
-      ABSL_SHARED_LOCKS_REQUIRED(engine_system_catalog_mutex);
 
   // Must be implemented by derived classes.
   virtual absl::Status AddTypes(

@@ -32,16 +32,28 @@
 #ifndef CATALOG_SPANGRES_SYSTEM_CATALOG_H_
 #define CATALOG_SPANGRES_SYSTEM_CATALOG_H_
 
+#include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
+#include "zetasql/public/catalog.h"
+#include "zetasql/public/input_argument_type.h"
 #include "zetasql/public/language_options.h"
 #include "zetasql/public/types/type.h"
+#include "absl/base/attributes.h"
+#include "absl/base/const_init.h"
+#include "absl/base/thread_annotations.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "third_party/spanner_pg/catalog/builtin_function.h"
 #include "third_party/spanner_pg/catalog/engine_system_catalog.h"
 #include "third_party/spanner_pg/catalog/function.h"
+#include "third_party/spanner_pg/catalog/function_identifier.h"
+#include "third_party/spanner_pg/catalog/type.h"
 #include "third_party/spanner_pg/interface/engine_builtin_function_catalog.h"
 
 namespace postgres_translator {
@@ -50,10 +62,22 @@ namespace spangres {
 constexpr absl::string_view kSpangresSystemCatalogName = "pg";
 constexpr char kDefaultFunctionNamespace[] = "pg_catalog";
 
+ABSL_CONST_INIT static absl::Mutex spangres_system_catalog_mutex(
+    absl::kConstInit);
+
 // A derived class of EngineSystemCatalog which represents the PostgreSQL types
 // and functions supported in Spanner through the PostgreSQL dialect.
 class SpangresSystemCatalog : public EngineSystemCatalog {
  public:
+  static SpangresSystemCatalog* GetSpangresSystemCatalog() {
+    absl::ReaderMutexLock l(&spangres_system_catalog_mutex);
+    SpangresSystemCatalog** spangres_system_catalog =
+        GetSpangresSystemCatalogPtr();
+    ABSL_DCHECK(*spangres_system_catalog != nullptr)
+        << "SpangresSystemCatalog accessed before it was initialized";
+    return *spangres_system_catalog;
+  }
+
   // Attempt to initialize the EngineSystemCatalog singleton with a
   // SpangresSystemCatalog.
   // Returns true if successful, false if EngineSystemCatalog was already
@@ -122,6 +146,15 @@ class SpangresSystemCatalog : public EngineSystemCatalog {
       std::unique_ptr<EngineBuiltinFunctionCatalog> builtin_function_catalog)
       : EngineSystemCatalog(kSpangresSystemCatalogName,
                             std::move(builtin_function_catalog)) {}
+
+  // Defines the SpangresSystemCatalog singleton.
+  // Used to read the singleton.
+  static SpangresSystemCatalog** GetSpangresSystemCatalogPtr()
+    ABSL_SHARED_LOCKS_REQUIRED(spangres_system_catalog_mutex) {
+    static SpangresSystemCatalog* spangres_system_catalog ABSL_GUARDED_BY(
+        spangres_system_catalog_mutex) = nullptr;
+    return &spangres_system_catalog;
+  }
 
   // Add PostgreSQL types for Spanner.
   absl::Status AddTypes(

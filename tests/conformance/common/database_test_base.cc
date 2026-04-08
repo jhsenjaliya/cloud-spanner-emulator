@@ -28,6 +28,7 @@
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "google/cloud/spanner/admin/database_admin_client.h"
@@ -115,7 +116,9 @@ void DatabaseTest::SetUp() {
 }
 
 void DatabaseTest::TearDown() {
-  database_client_->DropDatabase(database_->FullName());
+  if (database_client_ && database_) {
+    database_client_->DropDatabase(database_->FullName());
+  }
 }
 
 absl::Status DatabaseTest::ResetDatabase() {

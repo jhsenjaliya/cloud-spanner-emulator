@@ -930,6 +930,38 @@ TEST_P(ChangeStreamQueryAPITest, ExecutePartitionQueryAfterDropTrackingTable) {
   ASSERT_EQ(change_records2.data_change_records.size(), 0);
 }
 
+TEST_P(ChangeStreamQueryAPITest, CreateChangeStreamIfNotExists) {
+  // Change stream token lifetime to 1~2 hours to ensure the altering operations
+  // can be successfully committed before the token ends.
+  absl::SetFlag(&FLAGS_change_stream_churning_interval, absl::Hours(1));
+  absl::SetFlag(&FLAGS_change_stream_churn_thread_sleep_interval,
+                absl::Hours(1));
+
+  // Create the same change stream with IF NOT EXISTS should be OK.
+  ZETASQL_ASSERT_OK(UpdateSchema({R"(
+    CREATE CHANGE STREAM IF NOT EXISTS change_stream_test_table FOR test_table
+  )"}));
+
+  absl::Time after_create = Clock().Now();
+
+  // Insert a row into test_table
+  ZETASQL_ASSERT_OK(InsertOneRow("test_table"));
+
+  ZETASQL_ASSERT_OK_AND_ASSIGN(auto active_token,
+                       GetActiveTokenFromInitialQuery(after_create));
+
+  // Query change stream
+  ZETASQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
+                       ExecuteChangeStreamQuery(ConstructChangeStreamQuery(
+                           after_create, Clock().Now(), active_token)));
+
+  ASSERT_EQ(change_records.data_change_records.size(), 1);
+  EXPECT_EQ(change_records.data_change_records[0].table_name.string_value(),
+            "test_table");
+  EXPECT_EQ(change_records.data_change_records[0].mod_type.string_value(),
+            "INSERT");
+}
+
 }  // namespace
 
 }  // namespace frontend

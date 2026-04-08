@@ -948,15 +948,16 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
   if (node.removeType != OBJECT_TABLE && node.removeType != OBJECT_INDEX &&
       node.removeType != OBJECT_SCHEMA && node.removeType != OBJECT_VIEW &&
       node.removeType != OBJECT_CHANGE_STREAM &&
-      node.removeType != OBJECT_SEQUENCE
-      && node.removeType != OBJECT_SEARCH_INDEX
-      && node.removeType != OBJECT_LOCALITY_GROUP
+      node.removeType != OBJECT_SEQUENCE &&
+      node.removeType != OBJECT_FUNCTION
+      && node.removeType != OBJECT_SEARCH_INDEX &&
+      node.removeType != OBJECT_LOCALITY_GROUP
       // TODO: expose when queue is implemented.
-    ) {
+  ) {
     auto object_type = internal::ObjectTypeToString(node.removeType);
     const std::string error_message =
         "Only <DROP TABLE>, <DROP INDEX>, <DROP SCHEMA>, <DROP VIEW>, "
-        "<DROP SEQUENCE>, "
+        "<DROP SEQUENCE>, <DROP FUNCTION>, "
         "<DROP SEARCH INDEX>, "
         "<DROP LOCALITY GROUP>, "
         // TODO: expose when queue is implemented.
@@ -1004,11 +1005,25 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
               *locality_group_to_drop_node->relname != '\0');
   // TODO: expose when queue is implemented.
   } else if (node.removeType != OBJECT_SCHEMA) {
-    ZETASQL_ASSIGN_OR_RETURN(const List* object_to_drop_list,
-                     (SingleItemListAsNode<List, T_List>(node.objects)));
+    const List* object_to_drop_list;
+    if (node.removeType == OBJECT_FUNCTION) {
+      ZETASQL_ASSIGN_OR_RETURN(const ObjectWithArgs* object_with_args,
+                       (SingleItemListAsNode<ObjectWithArgs, T_ObjectWithArgs>(
+                           node.objects)));
+      if (list_length(object_with_args->objargs) > 0) {
+        return UnsupportedTranslationError(
+            "Object argument type qualifiers are not supported in <DROP> "
+            "statement.");
+      }
+      object_to_drop_list = object_with_args->objname;
+    } else {
+      ZETASQL_ASSIGN_OR_RETURN(object_to_drop_list,
+                       (SingleItemListAsNode<List, T_List>(node.objects)));
+    }
     ZETASQL_RET_CHECK(!IsListEmpty(object_to_drop_list))
         << "Empty object name to drop provided.";
     if (node.removeType == OBJECT_TABLE || node.removeType == OBJECT_INDEX ||
+        node.removeType == OBJECT_FUNCTION ||
         node.removeType == OBJECT_VIEW || node.removeType == OBJECT_SEQUENCE) {
       if (list_length(object_to_drop_list) > 2) {
         return UnsupportedTranslationError(
@@ -1061,6 +1076,7 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
     if (!options.enable_if_not_exists ||
         !(node.removeType == OBJECT_TABLE || node.removeType == OBJECT_INDEX ||
           node.removeType == OBJECT_SEQUENCE ||
+          node.removeType == OBJECT_FUNCTION ||
           node.removeType == OBJECT_VIEW || node.removeType == OBJECT_SCHEMA ||
           node.removeType == OBJECT_CHANGE_STREAM
           || node.removeType == OBJECT_SEARCH_INDEX ||

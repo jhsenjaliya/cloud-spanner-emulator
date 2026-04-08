@@ -222,7 +222,7 @@ absl::Status ColumnValidator::Validate(const Column* column,
   if (column->name_.length() > limits::kMaxSchemaIdentifierLength) {
     return error::InvalidSchemaName("Column", column->Name());
   }
-  if (column->Name()[0] == '_') {
+    if (column->Name()[0] == '_') {
     return error::InvalidSchemaName("Column", column->Name());
   }
 
@@ -266,6 +266,12 @@ absl::Status ColumnValidator::Validate(const Column* column,
 
   if (column->has_allows_commit_timestamp() && !column->type_->IsTimestamp()) {
     return error::UnallowedCommitTimestampOption(column->FullName());
+  }
+
+  if (column->is_identity_column()) {
+    if (!column->type_->IsInt64()) {
+      return error::UnsupportedIdentityColumnType(column->Name());
+    }
   }
 
   if (column->has_default_value()) {

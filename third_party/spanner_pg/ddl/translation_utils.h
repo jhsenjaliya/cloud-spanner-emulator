@@ -147,6 +147,8 @@ struct PostgreSQLConstants {
       "allow_txn_exclusion";
   static constexpr absl::string_view kChangeStreamPartitionModeOptionName =
       "partition_mode";
+  static constexpr absl::string_view kChangeStreamPerPlacementTvfOptionName =
+      "per_placement_tvf";
   static constexpr char kInternalLocalityGroupStorageOptionName[] = "inflash";
   static constexpr char kInternalLocalityGroupSpillTimeSpanOptionName[] =
       "age_based_spill_policy";

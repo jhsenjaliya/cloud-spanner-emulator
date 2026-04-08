@@ -36,6 +36,9 @@ namespace test {
 
 namespace {
 
+using ::testing::HasSubstr;
+using ::zetasql_base::testing::StatusIs;
+
 class UDFsTest
     : public DatabaseTest,
       public testing::WithParamInterface<database_api::DatabaseDialect> {
@@ -159,6 +162,83 @@ TEST_P(UDFsTest, IntervalDefaultParam) {
                   absl::StatusCode::kInvalidArgument,
                   testing::HasSubstr(
                       "Function parameter default value must be a literal")));
+}
+
+class UDFsDisabledTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+  absl::Status SetUpDatabase() override {
+    feature_flags_setter_ = std::make_unique<ScopedEmulatorFeatureFlagsSetter>(
+        EmulatorFeatureFlags::Flags{
+            .enable_user_defined_functions = false,
+        });
+    return absl::OkStatus();
+  }
+
+  void SetUp() override {
+    if (GetConformanceTestGlobals().in_prod_env) {
+      GTEST_SKIP() << "Test not applicable to the real Spanner backend "
+                      "(Emulator flags test)";
+    }
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+  void TearDown() override {
+    if (GetConformanceTestGlobals().in_prod_env) {
+      return;
+    }
+    DatabaseTest::TearDown();
+  }
+
+ public:
+  // Aliases so test expectations read more clearly.
+  cloud::spanner::Value Nb() { return Null<Bytes>(); }
+  cloud::spanner::Value Ns() { return Null<std::string>(); }
+  cloud::spanner::Value Ni() { return Null<std::int64_t>(); }
+
+ protected:
+  std::unique_ptr<ScopedEmulatorFeatureFlagsSetter> feature_flags_setter_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    UDFsDisabledTest, UDFsDisabledTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<UDFsDisabledTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(UDFsDisabledTest, CreateDropFunctionFailsIfDisabled) {
+  GTEST_SKIP() << "Temporarily disabled";
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    EXPECT_THAT(
+        UpdateSchema({R"sql(
+      CREATE FUNCTION inc_udf(x bigint) RETURNS bigint AS 'SELECT x + 1' LANGUAGE SQL
+    )sql"}),
+        StatusIs(absl::StatusCode::kFailedPrecondition,
+                 HasSubstr("<CREATE FUNCTION> statement is not supported")));
+    EXPECT_THAT(
+        UpdateSchema({R"sql(
+      DROP FUNCTION inc_udf
+    )sql"}),
+        StatusIs(absl::StatusCode::kFailedPrecondition,
+                 HasSubstr("<DROP FUNCTION> statement is not supported")));
+  } else {
+    EXPECT_THAT(
+        UpdateSchema({
+            R"SQL(
+      CREATE FUNCTION inc_udf(x INT64) RETURNS INT64 AS (x + 1)
+    )SQL"}),
+        StatusIs(absl::StatusCode::kInvalidArgument,
+                 HasSubstr("User defined functions are not supported")));
+    EXPECT_THAT(
+        UpdateSchema({
+            R"SQL(
+      DROP FUNCTION inc_udf
+    )SQL"}),
+        StatusIs(absl::StatusCode::kInvalidArgument,
+                 HasSubstr("User defined functions are not supported")));
+  }
 }
 
 }  // namespace

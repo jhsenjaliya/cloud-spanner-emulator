@@ -994,6 +994,8 @@ absl::Status InvalidDropDependentViews(absl::string_view type_kind,
 absl::Status WithViewsAreNotSupported();
 
 // Function errors.
+absl::Status UdfsNotSupported(absl::string_view function_name);
+absl::Status UdfsNotSupportedPostgreSQL(absl::string_view op);
 absl::Status FunctionDefinerSecurityError(absl::string_view function_name);
 absl::Status FunctionReplaceError(absl::string_view function_name,
                                   absl::string_view error);
@@ -1051,6 +1053,7 @@ absl::Status UnsupportedVersionRetentionPeriodOptionValues();
 // Identity column-related errors
 absl::Status ColumnIsNotIdentityColumn(absl::string_view table_name,
                                        absl::string_view column_name);
+absl::Status UnsupportedIdentityColumnType(absl::string_view column_name);
 absl::Status DefaultSequenceKindAlreadySet();
 absl::Status UnsupportedDefaultSequenceKindOptionValues();
 absl::Status UnspecifiedIdentityColumnSequenceKind(

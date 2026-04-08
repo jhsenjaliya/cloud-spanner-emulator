@@ -42,7 +42,10 @@ licenses(["notice"])
 cc_library(
     name = "engine_system_catalog",
     srcs = ["engine_system_catalog.cc"],
-    hdrs = ["engine_system_catalog.h"],
+    hdrs = [
+        "engine_system_catalog.h",
+        "spangres_system_catalog.h",
+    ],
     deps = [
         ":builtin_functions",
         ":function",
@@ -193,6 +196,7 @@ cc_library(
         ":builtin_functions",
         ":engine_system_catalog",
         ":function",
+        ":function_identifier",
         ":spangres_function_mapper",
         ":spangres_type",
         ":type",
@@ -204,9 +208,11 @@ cc_library(
         "//third_party/spanner_pg/datatypes/extended:pg_oid_type",
         "//third_party/spanner_pg/interface:emulator_builtin_function_catalog",
         "//third_party/spanner_pg/postgres_includes",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:btree",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -215,6 +221,7 @@ cc_library(
         "@com_google_zetasql//zetasql/analyzer:function_signature_matcher",
         "@com_google_zetasql//zetasql/base:no_destructor",
         "@com_google_zetasql//zetasql/base:ret_check",
+        "@com_google_zetasql//zetasql/public:catalog",
         "@com_google_zetasql//zetasql/public:function",
         "@com_google_zetasql//zetasql/public:language_options",
         "@com_google_zetasql//zetasql/public:type",
@@ -608,6 +615,7 @@ cc_library(
     deps = [
         ":engine_user_catalog",
         "//backend/query:queryable_table",
+        "//backend/query:queryable_udf",
         "//backend/schema/catalog:schema",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",

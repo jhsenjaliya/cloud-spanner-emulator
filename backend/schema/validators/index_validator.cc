@@ -102,7 +102,7 @@ absl::Status IndexValidator::Validate(const Index* index,
   }
 
   if (index->key_columns_.empty()) {
-    return error::IndexWithNoKeys(index->name_);
+      return error::IndexWithNoKeys(index->name_);
   }
 
   CaseInsensitiveStringSet keys_set;

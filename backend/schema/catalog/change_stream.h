@@ -98,11 +98,15 @@ class ChangeStream : public SchemaNode {
   std::optional<bool> exclude_ttl_deletes() const {
     return exclude_ttl_deletes_;
   }
+  std::optional<bool> allow_txn_exclusion() const {
+    return allow_txn_exclusion_;
+  }
 
   bool HasExplicitValidOptions() const {
     return value_capture_type().has_value() || retention_period().has_value() ||
            exclude_insert().has_value() || exclude_update().has_value() ||
-           exclude_delete().has_value() || exclude_ttl_deletes().has_value();
+           exclude_delete().has_value() || exclude_ttl_deletes().has_value() ||
+           allow_txn_exclusion().has_value();
   }
 
   const ::google::protobuf::RepeatedPtrField<ddl::SetOption> options() const {
@@ -212,6 +216,7 @@ class ChangeStream : public SchemaNode {
   std::optional<bool> exclude_insert_ = std::nullopt;
   std::optional<bool> exclude_update_ = std::nullopt;
   std::optional<bool> exclude_delete_ = std::nullopt;
+  std::optional<bool> allow_txn_exclusion_ = std::nullopt;
   // If true, exclude recording ttl delete from current change stream. Default
   // is false if not set.
   std::optional<bool> exclude_ttl_deletes_ = std::nullopt;

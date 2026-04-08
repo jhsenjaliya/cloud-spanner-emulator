@@ -151,6 +151,25 @@ TEST_P(DatabaseOptionTest, VersionRetentionPeriodOptionName) {
   EXPECT_EQ(schema->options()->version_retention_period().value(), "2h");
 }
 
+TEST_P(DatabaseOptionTest, ValidColumnarPolicyOptionName) {
+  std::unique_ptr<const Schema> schema;
+  if (GetParam() == POSTGRESQL) {
+    ZETASQL_ASSERT_OK_AND_ASSIGN(schema,
+                         CreateSchema({R"(
+      ALTER DATABASE db SET spanner.columnar_policy TO 'enabled'
+                                      )"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+  } else {
+    ZETASQL_ASSERT_OK_AND_ASSIGN(schema, CreateSchema({R"(
+      ALTER DATABASE db SET OPTIONS (columnar_policy = 'enabled')
+        )"}));
+  }
+  ASSERT_TRUE(schema->options()->columnar_policy().has_value());
+  EXPECT_EQ(schema->options()->columnar_policy().value(), "enabled");
+}
+
 TEST_P(DatabaseOptionTest, InvalidDatabaseOptionName) {
   std::unique_ptr<const Schema> schema;
   if (GetParam() == POSTGRESQL) {

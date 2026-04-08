@@ -14,6 +14,13 @@
 // limitations under the License.
 //
 
+#include "google/spanner/admin/database/v1/common.pb.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include "zetasql/base/testing/status_matchers.h"
+#include "tests/common/proto_matchers.h"
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
 #include "tests/conformance/common/database_test_base.h"
 
 namespace google {
@@ -27,13 +34,11 @@ using zetasql_base::testing::StatusIs;
 
 class SingletonTableTest : public DatabaseTest {
  public:
+  void SetUp() override { DatabaseTest::SetUp(); }
+
+ public:
   absl::Status SetUpDatabase() override {
-    return SetSchema({R"(
-      CREATE TABLE Singleton(
-        col1 STRING(MAX),
-        col2 STRING(MAX)
-      ) PRIMARY KEY ()
-    )"});
+    return SetSchemaFromFile("singleton_tables.test");
   }
 };
 

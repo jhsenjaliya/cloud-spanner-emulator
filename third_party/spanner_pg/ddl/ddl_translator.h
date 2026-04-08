@@ -120,6 +120,9 @@ struct TranslationOptions {
   // enable_change_streams_partition_mode_option allows the partition_mode
   // option for CREATE CHANGE STREAM.
   bool enable_change_streams_partition_mode_option = false;
+  // enable_change_streams_per_placement_tvf_option allows the
+  // per_placement_tvf option for CREATE CHANGE STREAM.
+  bool enable_change_streams_per_placement_tvf_option = false;
   // This enables support for search index in Spangres.
   bool enable_search_index = true;
   // enable_locality_groups allows create/drop/alter locality groups.

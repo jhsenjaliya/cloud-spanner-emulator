@@ -38,6 +38,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_split.h"
 #include "backend/query/queryable_table.h"
+#include "backend/query/queryable_udf.h"
 #include "backend/schema/catalog/column.h"
 
 const absl::flat_hash_map<std::string, std::string> kPgToSpannerSchemaMapping =
@@ -53,6 +54,11 @@ namespace spangres {
 const std::vector<std::string> SpangresUserCatalog::GetCatalogPathForTable(
     const zetasql::Table* table) const {
   return absl::StrSplit(table->FullName(), '.');
+}
+
+bool SpangresUserCatalog::IsUserDefinedFunction(
+    const zetasql::Function* udf) const {
+  return udf->GetGroup() == google::spanner::emulator::backend::kSqlUdfGroup;
 }
 
 absl::StatusOr<std::vector<absl::string_view>>

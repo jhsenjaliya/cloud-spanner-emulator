@@ -251,6 +251,20 @@ Catalog::Catalog(const Schema* schema, const FunctionCatalog* function_catalog,
     }
   }
 
+  // Pass the query_evaluator to views.
+  for (const auto* view : schema->views()) {
+    std::string name = view->Name();
+    if (SDLObjectName::IsFullyQualifiedName(name)) {
+      absl::Status status = AddObjectToNamedSchema(
+          std::string(SDLObjectName::GetSchemaName(name)),
+          std::make_unique<QueryableView>(view, query_evaluator));
+      LOG_IF(ERROR, !status.ok()) << status.message();
+    } else {
+      views_[view->Name()] =
+          std::make_unique<QueryableView>(view, query_evaluator);
+    }
+  }
+
   for (const auto* graph : schema->property_graphs()) {
     std::string name = graph->Name();
     // Confirm that the property graph is not in a named schema as that is not
@@ -276,20 +290,6 @@ Catalog::Catalog(const Schema* schema, const FunctionCatalog* function_catalog,
       }
       property_graphs_[graph->Name()] =
           std::make_unique<QueryablePropertyGraph>(this, type_factory, graph);
-    }
-  }
-
-  // Pass the query_evaluator to views.
-  for (const auto* view : schema->views()) {
-    std::string name = view->Name();
-    if (SDLObjectName::IsFullyQualifiedName(name)) {
-      absl::Status status = AddObjectToNamedSchema(
-          std::string(SDLObjectName::GetSchemaName(name)),
-          std::make_unique<QueryableView>(view, query_evaluator));
-      LOG_IF(ERROR, !status.ok()) << status.message();
-    } else {
-      views_[view->Name()] =
-          std::make_unique<QueryableView>(view, query_evaluator);
     }
   }
 

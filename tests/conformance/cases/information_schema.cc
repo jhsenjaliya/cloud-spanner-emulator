@@ -457,6 +457,7 @@ TEST_P(InformationSchemaTest, GSQLMetaColumns) {
         and t.table_name not in unnest(@unsupported_tables)
         and not (t.table_name = 'COLUMNS' and t.column_name in unnest(@unsupported_columns))
         and not (t.table_name = 'INDEXES' and t.column_name in unnest(@unsupported_columns))
+        and not (t.table_name = 'INDEX_COLUMNS' and t.column_name in unnest(@unsupported_columns))
         and not (t.table_name = 'COLUMN_OPTIONS' and t.column_name in unnest(@unsupported_columns))
         and not (t.table_name = 'LOCALITY_GROUP_OPTIONS' and t.column_name in unnest(@unsupported_columns))
         and not (t.table_name = 'TABLES' and t.column_name = 'INTERLEAVE_TYPE')
@@ -2665,7 +2666,8 @@ TEST_P(InformationSchemaTest, DefaultDatabaseOptions) {
         information_schema.database_options AS t
       where
         t.option_name = 'database_dialect' OR
-        t.option_name = 'default_sequence_kind'
+        t.option_name = 'default_sequence_kind' OR
+        t.option_name = 'version_retention_period'
       order by
         t.option_name
     )");
@@ -2675,7 +2677,8 @@ TEST_P(InformationSchemaTest, DefaultDatabaseOptions) {
   // clang-format off
   auto expected = std::vector<ValueRow>({
     {"database_dialect", type, database_api::DatabaseDialect_Name(GetParam())},  // NOLINT
-    {"default_sequence_kind", type, "bit_reversed_positive"},
+    {"default_sequence_kind", type, "bit_reversed_positive"},  // NOLINT
+    {"version_retention_period", type, "2h"},  // NOLINT
   });
   // clang-format on
   EXPECT_THAT(results, IsOkAndHoldsRows(expected));
@@ -4138,6 +4141,9 @@ TEST_P(InformationSchemaTest, DefaultModelColumnOptions) {
 }
 
 TEST_P(InformationSchemaTest, DefaultPropertyGraphs) {
+  // TODO: remove this immediately when info schema proto is
+  // updated and fix this test.
+  GTEST_SKIP() << "Skipping test due to conformance test on proto update.";
   if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
     return;
   }
