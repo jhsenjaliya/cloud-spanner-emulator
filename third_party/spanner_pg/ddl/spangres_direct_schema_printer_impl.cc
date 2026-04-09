@@ -214,6 +214,10 @@ class SpangresSchemaPrinterImpl : public SpangresSchemaPrinter {
       google::spanner::emulator::backend::ddl::Function::SqlSecurity sql_security) const;
   absl::StatusOr<std::string> PrintSQLSecurityTypeForView(
       google::spanner::emulator::backend::ddl::Function::SqlSecurity sql_security) const;
+  absl::StatusOr<std::string> PrintSpannerType(
+      const std::string& type_name) const;
+  absl::StatusOr<std::string> PrintFunctionDeterminism(
+      google::spanner::emulator::backend::ddl::Function::Determinism determinism) const;
   absl::StatusOr<std::string> PrintCreateFunction(
       const google::spanner::emulator::backend::ddl::CreateFunction& statement) const;
   absl::StatusOr<std::string> PrintColumn(
@@ -1197,10 +1201,11 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintDropFunction(
       return Substitute("DROP VIEW $0$1", if_exists,
                         QuoteQualifiedIdentifier(statement.function_name()));
     case google::spanner::emulator::backend::ddl::Function::FUNCTION:
-
+      return Substitute("DROP FUNCTION $0$1", if_exists,
+                        QuoteQualifiedIdentifier(statement.function_name()));
     case google::spanner::emulator::backend::ddl::Function::INVALID_KIND:
       ZETASQL_RET_CHECK_FAIL()
-      << "Only VIEW is supported as a function kind";
+          << "Only VIEW and FUNCTION are supported as function kinds";
   }
   // Should never get here.
   ZETASQL_RET_CHECK_FAIL() << "Unknown Function type:"
@@ -1518,6 +1523,52 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreateFunction(
           view_template, QuoteQualifiedIdentifier(statement.function_name()),
           with_clause, statement.sql_body_origin().original_expression());
     }
+    case google::spanner::emulator::backend::ddl::Function_Kind::Function_Kind_FUNCTION: {
+      ZETASQL_RET_CHECK(statement.has_sql_body_origin())
+          << "SQL body origin is required for function: "
+          << statement.function_name();
+      std::string function_template =
+          statement.is_or_replace() ? "CREATE OR REPLACE" : "CREATE";
+      function_template += " FUNCTION $0($1) RETURNS $2$3$4 RETURN $5";
+
+      std::vector<std::string> parameters;
+      for (const auto& param : statement.param()) {
+        std::string param_name = IsUdfParameterNameReserved(param.name())
+                                     ? ""
+                                     : absl::StrCat(param.name(), " ");
+        ZETASQL_ASSIGN_OR_RETURN(std::string param_type,
+                         PrintSpannerType(param.param_typename()));
+        std::string default_expression =
+            param.default_value_origin().has_original_expression()
+                ? StrCat(" DEFAULT ",
+                         param.default_value_origin().original_expression())
+                : "";
+        parameters.push_back(
+            absl::StrCat(param_name, param_type, default_expression));
+      }
+
+      ZETASQL_ASSIGN_OR_RETURN(std::string return_type,
+                       PrintSpannerType(statement.return_typename()));
+      std::string security_type = "";
+      if (statement.has_sql_security() &&
+          statement.sql_security() !=
+              google::spanner::emulator::backend::ddl::Function::UNSPECIFIED_SQL_SECURITY) {
+        security_type = " SECURITY " +
+                        PrintSQLSecurityType(statement.sql_security()).value();
+      }
+      std::string volatility_type;
+      if (statement.has_determinism()) {
+        ZETASQL_ASSIGN_OR_RETURN(volatility_type,
+                         PrintFunctionDeterminism(statement.determinism()));
+        volatility_type = " " + volatility_type;
+      }
+
+      return Substitute(function_template,
+                        QuoteQualifiedIdentifier(statement.function_name()),
+                        absl::StrJoin(parameters, ", "), return_type,
+                        volatility_type, security_type,
+                        statement.sql_body_origin().original_expression());
+    }
     case google::spanner::emulator::backend::ddl::Function_Kind::Function_Kind_INVALID_KIND:
       ZETASQL_RET_CHECK_FAIL()
           << "Only VIEW and scalar FUNCTION are supported as function types.";
@@ -1525,6 +1576,75 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreateFunction(
   // Should never get here.
   ZETASQL_RET_CHECK_FAIL() << "Unknown Function type:"
                    << static_cast<int64_t>(statement.function_kind());
+}
+
+absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintFunctionDeterminism(
+    google::spanner::emulator::backend::ddl::Function::Determinism determinism) const {
+  switch (determinism) {
+    case google::spanner::emulator::backend::ddl::Function::DETERMINISTIC:
+      return "IMMUTABLE";
+    case google::spanner::emulator::backend::ddl::Function::NOT_DETERMINISTIC_STABLE:
+      return "STABLE";
+    case google::spanner::emulator::backend::ddl::Function::NOT_DETERMINISTIC_VOLATILE:
+      return "VOLATILE";
+    default:
+      ZETASQL_RET_CHECK_FAIL() << "Unsupported volatility type: " << determinism;
+  }
+}
+
+// TODO: Remove after type refactor.
+absl::StatusOr<std::string> GoogleSqlTypeNameToSpannerSdlTypeEnumName(
+    const std::string& gsql_type_name) {
+  // Handle special Spangres extended types
+  if (gsql_type_name == "PG.NUMERIC") {
+    return "PG_NUMERIC";
+  }
+  if (gsql_type_name == "PG.JSONB") {
+    return "PG_JSONB";
+  }
+  if (gsql_type_name == "PG.OID") {
+    return "PG_OID";
+  }
+  ZETASQL_RET_CHECK(!absl::StartsWith(gsql_type_name, "PG."))
+      << "Unexpected type name: " << gsql_type_name;
+
+  if (gsql_type_name == "FLOAT32") {
+    return "FLOAT";
+  }
+  if (gsql_type_name == "FLOAT64") {
+    return "DOUBLE";
+  }
+
+  // For standard types, the enum name usually matches the ZetaSQL name (e.g.,
+  // "INT64", "STRING") The current logic handles arrays, this function assumes
+  // the input is a non-array name.
+  return gsql_type_name;
+}
+
+absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintSpannerType(
+    const std::string& type_name) const {
+  google::spanner::emulator::backend::ddl::ColumnDefinition column;
+  google::spanner::emulator::backend::ddl::ColumnDefinition::Type type;
+  if (absl::StartsWith(type_name, "ARRAY<") && absl::EndsWith(type_name, ">")) {
+    column.set_type(google::spanner::emulator::backend::ddl::ColumnDefinition::ARRAY);
+    std::string array_type_name = type_name.substr(6, type_name.size() - 7);
+    ZETASQL_ASSIGN_OR_RETURN(array_type_name, GoogleSqlTypeNameToSpannerSdlTypeEnumName(
+                                          array_type_name));
+    if (!google::spanner::emulator::backend::ddl::ColumnDefinition::Type_Parse(array_type_name, &type)) {
+      return StatementTranslationError(
+          StrCat("Spanner type <", array_type_name, "> is not supported."));
+    }
+    column.mutable_array_subtype()->set_type(type);
+  } else {
+    ZETASQL_ASSIGN_OR_RETURN(std::string sdl_type_name,
+                     GoogleSqlTypeNameToSpannerSdlTypeEnumName(type_name));
+    if (!google::spanner::emulator::backend::ddl::ColumnDefinition::Type_Parse(sdl_type_name, &type)) {
+      return StatementTranslationError(
+          StrCat("Spanner type <", sdl_type_name, "> is not supported."));
+    }
+    column.set_type(type);
+  }
+  return PrintType(column);
 }
 
 absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintType(

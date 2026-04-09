@@ -60,10 +60,10 @@
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
-#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "third_party/spanner_pg/bootstrap_catalog/bootstrap_catalog.h"
 #include "third_party/spanner_pg/catalog/builtin_function.h"
+#include "third_party/spanner_pg/catalog/spangres_system_catalog.h"
 #include "third_party/spanner_pg/catalog/function.h"
 #include "third_party/spanner_pg/catalog/function_identifier.h"
 #include "third_party/spanner_pg/catalog/type.h"
@@ -132,17 +132,7 @@ EngineSystemCatalog::BuildMappedFunction(
 }
 
 EngineSystemCatalog* EngineSystemCatalog::GetEngineSystemCatalog() {
-  absl::ReaderMutexLock l(&engine_system_catalog_mutex);
-  EngineSystemCatalog** engine_system_catalog = GetEngineSystemCatalogPtr();
-  ABSL_DCHECK(*engine_system_catalog != nullptr)
-      << "EngineSystemCatalog accessed before it was initialized";
-  return *engine_system_catalog;
-}
-
-EngineSystemCatalog** EngineSystemCatalog::GetEngineSystemCatalogPtr() {
-  static EngineSystemCatalog* engine_system_catalog ABSL_GUARDED_BY(
-      engine_system_catalog_mutex) = nullptr;
-  return &engine_system_catalog;
+  return spangres::SpangresSystemCatalog::GetSpangresSystemCatalog();
 }
 
 absl::Status EngineSystemCatalog::GetType(const std::string& name,

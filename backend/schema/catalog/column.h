@@ -37,7 +37,9 @@
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/udf.h"
 #include "backend/schema/graph/schema_node.h"
+#include "common/constants.h"
 #include "common/limits.h"
+#include "re2/re2.h"
 #include "absl/status/status.h"
 
 namespace google {

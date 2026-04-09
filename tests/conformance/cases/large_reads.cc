@@ -16,6 +16,7 @@
 
 #include <vector>
 
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "zetasql/base/testing/status_matchers.h"
@@ -33,17 +34,18 @@ namespace {
 constexpr int64_t kNumRows = 20;
 constexpr int64_t kStringSize = 409600;
 
-class LargeReadsTest : public DatabaseTest {
+class LargeReadsTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+ public:
+  void SetUp() override {
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+
  public:
   absl::Status SetUpDatabase() override {
-    ZETASQL_RETURN_IF_ERROR(SetSchema({R"(
-      CREATE TABLE Users(
-        ID   INT64,
-        Name STRING(MAX),
-        List ARRAY<STRING(MAX)>,
-      ) PRIMARY KEY (ID)
-    )"}));
-    return absl::OkStatus();
+    return SetSchemaFromFile("large_reads.test");
   }
 
  protected:
@@ -56,7 +58,15 @@ class LargeReadsTest : public DatabaseTest {
   }
 };
 
-TEST_F(LargeReadsTest, CanPerformLargeReadWithRange) {
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectLargeReadsTest, LargeReadsTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<LargeReadsTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(LargeReadsTest, CanPerformLargeReadWithRange) {
   PopulateDatabase();
   ZETASQL_ASSERT_OK_AND_ASSIGN(
       std::vector<ValueRow> rows,
@@ -70,7 +80,7 @@ TEST_F(LargeReadsTest, CanPerformLargeReadWithRange) {
   }
 }
 
-TEST_F(LargeReadsTest, CanPerformLargeReadWithAllRows) {
+TEST_P(LargeReadsTest, CanPerformLargeReadWithAllRows) {
   PopulateDatabase();
   ZETASQL_ASSERT_OK_AND_ASSIGN(std::vector<ValueRow> rows,
                        Read("Users", {"ID", "Name"}, KeySet::All()));

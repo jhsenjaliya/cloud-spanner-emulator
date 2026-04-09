@@ -26,7 +26,7 @@ cc_test(
     name = "emulator_conformance_test",
     size = "large",
     srcs = ["emulator_conformance_test.cc"],
-    shard_count = 20,
+    shard_count = 32,
     deps = [
         "//common:feature_flags",
         "//frontend/server",

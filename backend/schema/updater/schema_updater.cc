@@ -70,7 +70,6 @@
 #include "backend/query/analyzer_options.h"
 #include "backend/query/catalog.h"
 #include "backend/query/function_catalog.h"
-#include "backend/query/prepare_property_graph_catalog.h"
 #include "backend/schema/backfills/change_stream_backfill.h"
 #include "backend/schema/backfills/column_value_backfill.h"
 #include "backend/schema/backfills/index_backfill.h"
@@ -125,6 +124,8 @@
 #include "common/limits.h"
 #include "third_party/spanner_pg/ddl/ddl_translator.h"
 #include "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.h"
+#include "third_party/spanner_pg/ddl/spangres_direct_schema_printer_impl.h"
+#include "third_party/spanner_pg/ddl/spangres_schema_printer.h"
 #include "third_party/spanner_pg/interface/emulator_parser.h"
 #include "third_party/spanner_pg/interface/parser_output.h"
 #include "third_party/spanner_pg/interface/pg_arena.h"
@@ -150,6 +151,7 @@ namespace {
 
 namespace database_api = ::google::spanner::admin::database::v1;
 using ::postgres_translator::interfaces::ExpressionTranslateResult;
+using ::postgres_translator::spangres::SpangresSchemaPrinter;
 typedef google::protobuf::RepeatedPtrField<ddl::SetOption> OptionList;
 
 // A struct that defines the columns used by an index.
@@ -413,7 +415,8 @@ class SchemaUpdaterImpl {
   static Table::InterleaveType GetInterleaveType(
       const ddl::InterleaveClause& interleave);
   absl::Status CreateForeignKeyConstraint(
-      const ddl::ForeignKey& ddl_foreign_key, const Table* referencing_table);
+      const ddl::ForeignKey& ddl_foreign_key, const Table* referencing_table,
+      const database_api::DatabaseDialect& dialect);
   absl::StatusOr<const ForeignKey*> BuildForeignKeyConstraint(
       const ddl::ForeignKey& ddl_foreign_key, const Table* referencing_table);
   absl::Status EvaluateForeignKeyReferencedPrimaryKey(
@@ -426,7 +429,8 @@ class SchemaUpdaterImpl {
       const std::vector<int>& column_order, bool* index_required) const;
   absl::StatusOr<const Index*> CreateForeignKeyIndex(
       const ForeignKey* foreign_key, const Table* table,
-      const std::vector<std::string>& column_names, bool unique);
+      const std::vector<std::string>& column_names,
+      const database_api::DatabaseDialect& dialect, bool unique);
   bool CanInterleaveForeignKeyIndex(
       const Table* table, const std::vector<std::string>& column_names) const;
 
@@ -434,6 +438,8 @@ class SchemaUpdaterImpl {
       const Table* table, const ddl::CreateTable* ddl_create_table,
       absl::string_view expression);
   absl::StatusOr<ExpressionTranslateResult> TranslatePostgreSqlQueryInView(
+      absl::string_view query);
+  absl::StatusOr<ExpressionTranslateResult> TranslatePostgreSqlQueryInUdf(
       absl::string_view query);
 
   absl::Status CreateCheckConstraint(
@@ -489,7 +495,9 @@ class SchemaUpdaterImpl {
       const std::string& pk_column_name, Table::Builder* builder);
 
   absl::StatusOr<const Index*> CreateIndex(
-      const ddl::CreateIndex& ddl_index, const Table* indexed_table = nullptr);
+      const ddl::CreateIndex& ddl_index,
+      const database_api::DatabaseDialect& dialect,
+      const Table* indexed_table = nullptr);
   absl::StatusOr<const Index*> CreateVectorIndex(
       const ddl::CreateVectorIndex& ddl_index,
       const Table* indexed_table = nullptr);
@@ -603,7 +611,8 @@ class SchemaUpdaterImpl {
   absl::Status AddCheckConstraint(
       const ddl::CheckConstraint& ddl_check_constraint, const Table* table);
   absl::Status AddForeignKey(const ddl::ForeignKey& ddl_foreign_key,
-                             const Table* table);
+                             const Table* table,
+                             const database_api::DatabaseDialect& dialect);
   absl::Status DropConstraint(const std::string& constraint_name,
                               const Table* table);
   absl::Status RenameTo(const ddl::AlterTable::RenameTo& rename_to,
@@ -790,10 +799,39 @@ absl::Status SchemaUpdaterImpl::AlterInNamedSchema(
 
 absl::Status ValidateDdlStatement(const ddl::DDLStatement& ddl,
                                   database_api::DatabaseDialect dialect) {
-  if ((ddl.has_create_function() || ddl.has_drop_function()) &&
-      !EmulatorFeatureFlags::instance().flags().enable_views) {
-    return error::ViewsNotSupported(ddl.has_create_function() ? "CREATE"
-                                                              : "DROP");
+  if (ddl.has_create_function() || ddl.has_drop_function()) {
+    auto function_kind = ddl.has_create_function()
+                             ? ddl.create_function().function_kind()
+                             : ddl.drop_function().function_kind();
+    if (dialect == database_api::DatabaseDialect::POSTGRESQL) {
+      if (function_kind == ddl::Function::VIEW) {
+        if (!EmulatorFeatureFlags::instance().flags().enable_views) {
+          return error::ViewsNotSupported(ddl.has_create_function() ? "CREATE"
+                                                                    : "DROP");
+        }
+      } else {
+        // For PostgreSQL, any non-VIEW create/drop function is treated as a UDF
+        if (!EmulatorFeatureFlags::instance()
+                 .flags()
+                 .enable_user_defined_functions) {
+          return error::UdfsNotSupportedPostgreSQL(
+              ddl.has_create_function() ? "CREATE" : "DROP");
+        }
+      }
+    } else {
+      if (function_kind == ddl::Function::FUNCTION &&
+          !EmulatorFeatureFlags::instance()
+               .flags()
+               .enable_user_defined_functions) {
+        return error::UdfsNotSupported(
+            ddl.has_create_function() ? ddl.create_function().function_name()
+                                      : ddl.drop_function().function_name());
+      } else if (function_kind == ddl::Function::VIEW &&
+                 !EmulatorFeatureFlags::instance().flags().enable_views) {
+        return error::ViewsNotSupported(ddl.has_create_function() ? "CREATE"
+                                                                  : "DROP");
+      }
+    }
   }
 
   if ((ddl.has_create_sequence() || ddl.has_alter_sequence() ||
@@ -853,23 +891,50 @@ SchemaUpdaterImpl::ApplyDDLStatement(
               ddl::IF_NOT_EXISTS) {
         break;
       }
-      ZETASQL_RETURN_IF_ERROR(CreateIndex(ddl_statement->create_index()).status());
+      ZETASQL_RETURN_IF_ERROR(
+          CreateIndex(ddl_statement->create_index(), dialect).status());
       break;
     }
     case ddl::DDLStatement::kCreateFunction: {
       if (dialect == database_api::DatabaseDialect::POSTGRESQL) {
+        absl::StatusOr<ExpressionTranslateResult> result;
         ddl::CreateFunction* create_function =
             ddl_statement->mutable_create_function();
-        ZETASQL_RET_CHECK(create_function->has_sql_body_origin() &&
-                  create_function->sql_body_origin().has_original_expression());
-        auto result = TranslatePostgreSqlQueryInView(absl::StripAsciiWhitespace(
-            create_function->sql_body_origin().original_expression()));
-        if (!result.ok()) {
-          return error::ViewBodyAnalysisError(create_function->function_name(),
-                                              result.status().message());
+        if (ddl_statement->create_function().function_kind() ==
+            ddl::Function::VIEW) {
+          ZETASQL_RET_CHECK(
+              create_function->has_sql_body_origin() &&
+              create_function->sql_body_origin().has_original_expression());
+
+          result = TranslatePostgreSqlQueryInView(absl::StripAsciiWhitespace(
+              create_function->sql_body_origin().original_expression()));
+          if (!result.ok()) {
+            return error::ViewBodyAnalysisError(
+                create_function->function_name(), result.status().message());
+          }
+        } else {
+          ZETASQL_RET_CHECK(
+              create_function->has_sql_body_origin() &&
+              create_function->sql_body_origin().has_original_expression());
+
+          absl::StatusOr<std::unique_ptr<SpangresSchemaPrinter>> printer =
+              postgres_translator::spangres::
+                  CreateSpangresDirectSchemaPrinter();
+          const ddl::DDLStatement& statement = *ddl_statement;
+          ZETASQL_ASSIGN_OR_RETURN(std::vector<std::string> pg_printed,
+                           (*printer)->PrintDDLStatementForEmulator(statement));
+          ZETASQL_RET_CHECK_EQ(pg_printed.size(), 1);
+
+          result = TranslatePostgreSqlQueryInUdf(
+              absl::StripAsciiWhitespace(pg_printed[0]));
+          if (!result.ok()) {
+            return error::FunctionBodyAnalysisError(
+                create_function->function_name(), result.status().message());
+          }
         }
         // Overwrite the original_expression to the deparsed (formalized) PG
-        // expression which can be different from the user-input PG expression.
+        // expression which can be different from the user-input PG
+        // expression.
         create_function->mutable_sql_body_origin()->set_original_expression(
             result->original_postgresql_expression);
         create_function->set_sql_body(result->translated_googlesql_expression);
@@ -1225,6 +1290,11 @@ absl::Status SchemaUpdaterImpl::SetTableOptions(
   for (const ddl::SetOption& option : set_options) {
     if (option.option_name() == ddl::kLocalityGroupOptionName) {
       ZETASQL_RETURN_IF_ERROR(ProcessLocalityGroupOption(option, modifier));
+    } else if (option.option_name() == ddl::kColumnarPolicyOptionName) {
+      // Accept any value for columnar policy.
+      // TODO: Columnar Policy value should be exposed in table
+      // options, once they are exposed.
+      continue;
     } else {
       ZETASQL_RET_CHECK(false) << "Invalid table option: " << option.option_name();
     }
@@ -1301,6 +1371,15 @@ absl::Status SchemaUpdaterImpl::SetDatabaseOptions(
         modifier->set_default_time_zone(default_time_zone);
       } else if (option.has_null_value()) {
         modifier->set_default_time_zone(std::nullopt);
+      }
+    }
+    if (absl::StripPrefix(option.option_name(), "spanner.internal.cloud_") ==
+        ddl::kColumnarPolicyOptionName) {
+      if (option.has_string_value()) {
+        std::optional<std::string> columnar_policy = option.string_value();
+        modifier->set_columnar_policy(columnar_policy);
+      } else if (option.has_null_value()) {
+        modifier->set_columnar_policy(std::nullopt);
       }
     }
     if (absl::StripPrefix(option.option_name(), "spanner.internal.minimum_") ==
@@ -2495,7 +2574,8 @@ absl::StatusOr<const KeyColumn*> SchemaUpdaterImpl::CreatePrimaryKeyColumn(
 }
 
 absl::Status SchemaUpdaterImpl::CreateForeignKeyConstraint(
-    const ddl::ForeignKey& ddl_foreign_key, const Table* referencing_table) {
+    const ddl::ForeignKey& ddl_foreign_key, const Table* referencing_table,
+    const database_api::DatabaseDialect& dialect) {
   // Build and add the emulator foreign key before creating any of its backing
   // indexes. This ensures the foreign key is validated first which in turn
   // ensures better foreign key error messages instead of obscure index errors.
@@ -2532,6 +2612,7 @@ absl::Status SchemaUpdaterImpl::CreateForeignKeyConstraint(
             foreign_key, foreign_key->referenced_table(),
             index_column_names(ddl_foreign_key.referenced_column_name(),
                                index_column_order),
+            dialect,
             /*unique=*/true));
     ZETASQL_RETURN_IF_ERROR(
         AlterNode<ForeignKey>(foreign_key, [&](ForeignKey::Editor* editor) {
@@ -2557,6 +2638,7 @@ absl::Status SchemaUpdaterImpl::CreateForeignKeyConstraint(
             foreign_key, referencing_table,
             index_column_names(ddl_foreign_key.constrained_column_name(),
                                index_column_order),
+            dialect,
             /*unique=*/false));
     ZETASQL_RETURN_IF_ERROR(
         AlterNode<ForeignKey>(foreign_key, [&](ForeignKey::Editor* editor) {
@@ -2771,7 +2853,8 @@ absl::Status SchemaUpdaterImpl::EvaluateForeignKeyReferencingPrimaryKey(
 
 absl::StatusOr<const Index*> SchemaUpdaterImpl::CreateForeignKeyIndex(
     const ForeignKey* foreign_key, const Table* table,
-    const std::vector<std::string>& column_names, bool unique) {
+    const std::vector<std::string>& column_names,
+    const database_api::DatabaseDialect& dialect, bool unique) {
   bool null_filtered =
       absl::c_any_of(column_names, [table](const std::string& column_name) {
         return table->FindColumn(column_name)->is_nullable();
@@ -2808,7 +2891,7 @@ absl::StatusOr<const Index*> SchemaUpdaterImpl::CreateForeignKeyIndex(
     if (CanInterleaveForeignKeyIndex(table, column_names)) {
       ddl_index.set_interleave_in_table(table->Name());
     }
-    ZETASQL_ASSIGN_OR_RETURN(index, CreateIndex(ddl_index, table));
+    ZETASQL_ASSIGN_OR_RETURN(index, CreateIndex(ddl_index, dialect, table));
   }
   ZETASQL_RETURN_IF_ERROR(AlterNode<Index>(index, [&](Index::Editor* index_editor) {
     index_editor->add_managing_node(foreign_key);
@@ -2917,6 +3000,34 @@ SchemaUpdaterImpl::TranslatePostgreSqlQueryInView(absl::string_view query) {
   ZETASQL_ASSIGN_OR_RETURN(
       ExpressionTranslateResult result,
       postgres_translator::spangres::TranslateQueryInView(
+          query, catalog, analyzer_options, type_factory_,
+          std::make_unique<FunctionCatalog>(
+              type_factory_,
+              /*catalog_name=*/kCloudSpannerEmulatorFunctionCatalogName,
+              /*schema=*/latest_schema_)),
+      _.With(MapSpangresDDLErrorToSpannerError));
+  return result;
+}
+
+absl::StatusOr<ExpressionTranslateResult>
+SchemaUpdaterImpl::TranslatePostgreSqlQueryInUdf(absl::string_view query) {
+  zetasql::AnalyzerOptions analyzer_options =
+      MakeGoogleSqlAnalyzerOptionsForViewsAndFunctions(
+          GetTimeZone(), admin::database::v1::POSTGRESQL);
+  analyzer_options.CreateDefaultArenasIfNotSet();
+  FunctionCatalog function_catalog(
+      type_factory_,
+      /*catalog_name=*/kCloudSpannerEmulatorFunctionCatalogName,
+      /*latest_schema=*/latest_schema_);
+  Catalog catalog(latest_schema_, &function_catalog, type_factory_,
+                  analyzer_options);
+
+  ZETASQL_ASSIGN_OR_RETURN(
+      std::unique_ptr<postgres_translator::interfaces::PGArena> arena,
+      postgres_translator::spangres::MemoryContextPGArena::Init(nullptr));
+  ZETASQL_ASSIGN_OR_RETURN(
+      ExpressionTranslateResult result,
+      postgres_translator::spangres::TranslateFunctionBody(
           query, catalog, analyzer_options, type_factory_,
           std::make_unique<FunctionCatalog>(
               type_factory_,
@@ -3060,7 +3171,8 @@ absl::Status SchemaUpdaterImpl::CreateTable(
   }
 
   for (const ddl::ForeignKey& ddl_foreign_key : ddl_table.foreign_key()) {
-    ZETASQL_RETURN_IF_ERROR(CreateForeignKeyConstraint(ddl_foreign_key, builder.get()));
+    ZETASQL_RETURN_IF_ERROR(
+        CreateForeignKeyConstraint(ddl_foreign_key, builder.get(), dialect));
   }
   if (ddl_table.has_interleave_clause()) {
     ZETASQL_RETURN_IF_ERROR(CreateInterleaveConstraintForTable(
@@ -3475,7 +3587,9 @@ SchemaUpdaterImpl::CreateIndexDataTable(
     data_table_pk.reserve(index_pk.size());
     // First create columns for the specified primary key.
 
+    int num_declared_keys = 0;
     for (const ddl::KeyPartClause& ddl_key_part : index_pk) {
+      ++num_declared_keys;
       data_table_pk.push_back(ddl_key_part);
 
       const std::string& column_name = ddl_key_part.key_name();
@@ -3521,7 +3635,6 @@ SchemaUpdaterImpl::CreateIndexDataTable(
       ZETASQL_RETURN_IF_ERROR(CreatePrimaryKeyConstraint(ddl_key_part, &builder,
                                                  /*with_oid=*/false));
     }
-    int num_declared_keys = index_pk.size();
     auto data_table_key_cols = builder.get()->primary_key();
     for (int i = 0; i < num_declared_keys; ++i) {
       columns_used_by_index->index_key_columns.push_back(
@@ -3640,12 +3753,13 @@ SchemaUpdaterImpl::CreateIndexDataTable(
 }
 
 absl::StatusOr<const Index*> SchemaUpdaterImpl::CreateIndex(
-    const ddl::CreateIndex& ddl_index, const Table* indexed_table) {
+    const ddl::CreateIndex& ddl_index,
+    const database_api::DatabaseDialect& dialect, const Table* indexed_table) {
   const std::string* interleave_in_table =
       ddl_index.has_interleave_in_table() ? &ddl_index.interleave_in_table()
                                           : nullptr;
-  const auto& index_pk = std::vector<ddl::KeyPartClause>(
-      ddl_index.key().begin(), ddl_index.key().end());
+  auto index_pk = std::vector<ddl::KeyPartClause>(ddl_index.key().begin(),
+                                                  ddl_index.key().end());
   bool is_unique = ddl_index.unique();
   bool is_null_filtered = ddl_index.null_filtered();
 
@@ -4121,7 +4235,6 @@ absl::StatusOr<const Index*> SchemaUpdaterImpl::CreateIndexHelper(
                            stored_columns, partition_by, order_by,
                            null_filtered_columns, builder.get(), indexed_table,
                            &columns_used_by_index));
-
   builder.set_index_data_table(data_table.get());
 
   for (const KeyColumn* key_col : columns_used_by_index.index_key_columns) {
@@ -4473,7 +4586,20 @@ absl::Status SchemaUpdaterImpl::CreateFunction(
   absl::flat_hash_set<const SchemaNode*> dependencies;
   if (ddl_function.function_kind() == ddl::Function::FUNCTION) {
     std::unique_ptr<zetasql::FunctionSignature> function_signature;
-    Udf::Determinism determinism_level = Udf::Determinism::DETERMINISTIC;
+    Udf::Determinism determinism_level;
+    switch (ddl_function.determinism()) {
+      case ddl::Function::DETERMINISTIC:
+        determinism_level = Udf::Determinism::DETERMINISTIC;
+        break;
+      case ddl::Function::NOT_DETERMINISTIC_STABLE:
+        determinism_level = Udf::Determinism::NOT_DETERMINISTIC_STABLE;
+        break;
+      case ddl::Function::NOT_DETERMINISTIC_VOLATILE:
+        determinism_level = Udf::Determinism::NOT_DETERMINISTIC_VOLATILE;
+        break;
+      default:
+        determinism_level = Udf::Determinism::DETERMINISM_UNSPECIFIED;
+    }
     ZETASQL_RETURN_IF_ERROR(
         AnalyzeFunctionDefinition(ddl_function, replace, &dependencies,
                                   &function_signature, &determinism_level));
@@ -4919,6 +5045,11 @@ absl::Status SchemaUpdaterImpl::ValidateAlterDatabaseOptions(
       }
 
       return error::UnsupportedVersionRetentionPeriodOptionValues();
+    } else if (option_name == ddl::kColumnarPolicyOptionName) {
+      if (option.has_string_value() || option.has_null_value()) {
+        continue;
+      }
+      return error::UnsupportedVersionRetentionPeriodOptionValues();
     } else {
       return error::UnsupportedAlterDatabaseOption(option_name);
     }
@@ -5227,7 +5358,8 @@ absl::Status SchemaUpdaterImpl::AlterTable(
           alter_table.add_check_constraint().check_constraint(), table);
     }
     case ddl::AlterTable::kAddForeignKey: {
-      return AddForeignKey(alter_table.add_foreign_key().foreign_key(), table);
+      return AddForeignKey(alter_table.add_foreign_key().foreign_key(), table,
+                           dialect);
     }
     case ddl::AlterTable::kDropConstraint: {
       return DropConstraint(alter_table.drop_constraint().name(), table);
@@ -5882,9 +6014,10 @@ absl::Status SchemaUpdaterImpl::AddCheckConstraint(
 }
 
 absl::Status SchemaUpdaterImpl::AddForeignKey(
-    const ddl::ForeignKey& ddl_foreign_key, const Table* table) {
+    const ddl::ForeignKey& ddl_foreign_key, const Table* table,
+    const database_api::DatabaseDialect& dialect) {
   return AlterNode<Table>(table, [&](Table::Editor* editor) -> absl::Status {
-    return CreateForeignKeyConstraint(ddl_foreign_key, table);
+    return CreateForeignKeyConstraint(ddl_foreign_key, table, dialect);
   });
 }
 
@@ -6244,8 +6377,8 @@ absl::Status SchemaUpdaterImpl::CreatePropertyGraph(
 
   // Create a catalog based on 'latest_schema_'for property graph DDL parsing
   // and analysis.
-  PreparePropertyGraphCatalog catalog(latest_schema_, &function_catalog,
-                                      type_factory_, analyzer_options);
+  Catalog catalog(latest_schema_, &function_catalog, type_factory_,
+                  analyzer_options);
   ZETASQL_ASSIGN_OR_RETURN(
       std::unique_ptr<const zetasql::AnalyzerOutput> analyzer_output,
       AnalyzeCreatePropertyGraph(ddl_create_property_graph, analyzer_options,
@@ -6781,6 +6914,9 @@ absl::StatusOr<std::unique_ptr<ddl::DDLStatement>> ParseDDLByDialect(
             EmulatorFeatureFlags::instance().flags().enable_default_time_zone,
         .enable_jsonb_type = true,
         .enable_array_jsonb_type = true,
+        .enable_create_function = EmulatorFeatureFlags::instance()
+                                      .flags()
+                                      .enable_user_defined_functions,
         .enable_create_view = true,
         // This enables Spangres ddl translator to record the original
         // expression in PG.
@@ -6789,9 +6925,11 @@ absl::StatusOr<std::unique_ptr<ddl::DDLStatement>> ParseDDLByDialect(
         .enable_change_streams = true,
         .enable_change_streams_mod_type_filter_options = true,
         .enable_change_streams_ttl_deletes_filter_option = true,
+        .enable_change_streams_allow_txn_exclusion_option = true,
         .enable_change_streams_if_not_exists = true,
         .enable_search_index =
             EmulatorFeatureFlags::instance().flags().enable_search_index,
+        .enable_columnar_policy = true,
         .enable_sequence = true,
         .enable_virtual_generated_column = true,
         .enable_hidden_column =

@@ -38,6 +38,7 @@
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/table.h"
+#include "backend/schema/catalog/udf.h"
 #include "backend/schema/catalog/view.h"
 #include "third_party/spanner_pg/bootstrap_catalog/bootstrap_catalog.h"
 #include "third_party/spanner_pg/catalog/type.h"
@@ -101,6 +102,7 @@ using google::spanner::emulator::backend::SDLObjectName;
 using google::spanner::emulator::backend::Sequence;
 using google::spanner::emulator::backend::SpannerSysColumnsMetadata;
 using google::spanner::emulator::backend::Table;
+using google::spanner::emulator::backend::Udf;
 using google::spanner::emulator::backend::View;
 using ::zetasql::types::Int64ArrayType;
 using ::zetasql::types::StringArrayType;
@@ -1856,7 +1858,7 @@ void PGCatalog::FillPGProcTable() {
   absl::flat_hash_set<const PostgresExtendedFunction*> functions;
   auto status = system_catalog_->GetPostgreSQLFunctions(&functions);
   if (!status.ok()) {
-    ZETASQL_VLOG(1) << "Failed to get table-valued functions: " << status;
+    ZETASQL_VLOG(1) << "Failed to get PostgreSQL functions: " << status;
     return;
   }
   for (const PostgresExtendedFunction* function : functions) {
@@ -1926,6 +1928,132 @@ void PGCatalog::FillPGProcTable() {
           Null(StringArrayType()),
       });
     }
+  }
+
+  for (const Udf* udf : default_schema_->udfs()) {
+    if (!udf->postgresql_oid().has_value()) {
+      ZETASQL_VLOG(1) << "UDF " << udf->Name() << " does not have a PostgreSQL OID.";
+      continue;
+    }
+    if (!udf->body_origin().has_value()) {
+      ZETASQL_VLOG(1) << "UDF " << udf->Name() << " does not have a body origin.";
+      continue;
+    }
+    const auto& [udf_schema, udf_name] =
+        GetSchemaAndNameForPGCatalog(udf->Name());
+    int namespace_oid = 0;
+    if (kHardCodedNamedSchemaOid.contains(udf_schema)) {
+      namespace_oid = kHardCodedNamedSchemaOid.at(udf_schema);
+    } else {
+      const NamedSchema* named_schema =
+          default_schema_->FindNamedSchema(udf_schema);
+      if (!named_schema->postgresql_oid().has_value()) {
+        ZETASQL_VLOG(1) << "Named schema " << udf_schema
+                << " does not have a PostgreSQL OID.";
+        continue;
+      }
+      namespace_oid = named_schema->postgresql_oid().value();
+    }
+    auto rettype_mapping = system_catalog_->GetTypeFromReverseMapping(
+        udf->signature()->result_type().type());
+    if (rettype_mapping == nullptr) {
+      ZETASQL_VLOG(1) << "Failed to get result type mapping for "
+              << udf->signature()->result_type().type()->DebugString();
+      continue;
+    }
+    int rettype_oid = rettype_mapping->PostgresTypeOid();
+    std::vector<zetasql::Value> proargtypes;
+    int variadic_type_oid = 0;
+    int arg_default_count = 0;
+    for (const auto& arg : udf->signature()->arguments()) {
+      auto type_mapping =
+          system_catalog_->GetTypeFromReverseMapping(arg.type());
+      if (type_mapping == nullptr) {
+        ZETASQL_VLOG(1) << "Failed to get arg type mapping for "
+                << arg.type()->DebugString();
+        continue;
+      }
+      if (arg.repeated()) {
+        variadic_type_oid = type_mapping->PostgresTypeOid();
+      }
+      if (arg.HasDefault()) {
+        ++arg_default_count;
+      }
+      proargtypes.push_back(
+          CreatePgOidValue(type_mapping->PostgresTypeOid()).value());
+    }
+    zetasql::Value provolatile;
+    switch (udf->determinism_level()) {
+      case Udf::Determinism::DETERMINISTIC:
+        provolatile = String("i");
+        break;
+      case Udf::Determinism::NOT_DETERMINISTIC_STABLE:
+        provolatile = String("s");
+        break;
+      case Udf::Determinism::NOT_DETERMINISTIC_VOLATILE:
+        provolatile = String("v");
+        break;
+      default:
+        provolatile = NullString();
+    }
+    rows.push_back({
+        // oid
+        CreatePgOidValue(udf->postgresql_oid().value()).value(),
+        // proname
+        String(udf->Name()),
+        // pronamespace
+        CreatePgOidValue(namespace_oid).value(),
+        // proowner
+        NullPgOid(),
+        // prolang
+        NullPgOid(),
+        // procost
+        NullDouble(),
+        // prorows
+        NullDouble(),
+        // provariadic
+        CreatePgOidValue(variadic_type_oid).value(),
+        // prokind
+        String("f"),
+        // prosecdef
+        NullBool(),
+        // proleakproof
+        NullBool(),
+        // proisstrict
+        NullBool(),
+        // proretset
+        Bool(false),
+        // provolatile
+        provolatile,
+        // proparallel
+        NullString(),
+        // pronargs
+        Int64(udf->signature()->arguments().size()),
+        // pronargdefaults
+        Int64(arg_default_count),
+        // prorettype
+        CreatePgOidValue(rettype_oid).value(),
+        // proargtypes
+        zetasql::Value::MakeArray(GetPgOidArrayType(), proargtypes).value(),
+        // proallargtypes
+        Null(GetPgOidArrayType()),
+        // proargmodes
+        Null(StringArrayType()),
+        // proargnames
+        Null(StringArrayType()),
+        // proargdefaults
+        NullString(),
+        // protrftypes
+        Null(GetPgOidArrayType()),
+        // prosrc
+        NullString(),
+        // probin
+        NullString(),
+        // prosqlbody
+        String(udf->body_origin().value()),
+        // proconfig
+        Null(StringArrayType()),
+    });
   }
 
   absl::flat_hash_map<Oid, const zetasql::TableValuedFunction*> tvfs;

@@ -56,6 +56,8 @@ class SpangresUserCatalog : public EngineUserCatalog {
   const std::vector<std::string> GetCatalogPathForTable(
       const zetasql::Table* table) const override;
 
+  bool IsUserDefinedFunction(const zetasql::Function* udf) const override;
+
   absl::StatusOr<std::vector<absl::string_view>> GetPrimaryKeyColumns(
       const zetasql::Table& table) const override;
 

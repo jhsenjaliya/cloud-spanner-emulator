@@ -84,3 +84,7 @@ CREATE TABLE array_table (
   string_array        varchar(30)[],
   has_not_applicable  bool generated always as (arrayoverlap(string_array, ARRAY['not_applicable'])) stored
 );
+CREATE TABLE EntityWithArrays (
+  id bigint NOT NULL PRIMARY KEY,
+  the_array varchar(255)[]
+);

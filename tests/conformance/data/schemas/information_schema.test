@@ -1,5 +1,6 @@
 @Dialect=GOOGLE_STANDARD_SQL
 ALTER DATABASE db SET OPTIONS (default_sequence_kind = 'bit_reversed_positive');
+ALTER DATABASE db SET OPTIONS (version_retention_period = '2h');
 CREATE TABLE base (
   key1 INT64,
   key2 STRING(256),
@@ -133,6 +134,7 @@ CREATE VECTOR INDEX vec_index ON vector_table(embedding) WHERE embedding IS NOT 
 ===
 @Dialect=POSTGRESQL
 ALTER DATABASE db SET spanner.default_sequence_kind = 'bit_reversed_positive';
+ALTER DATABASE db SET spanner.version_retention_period = '2h';
 CREATE TABLE base (
   key1 bigint,
   key2 varchar(256),

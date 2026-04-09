@@ -342,6 +342,7 @@ message Function {
     optional string name = 1;
     optional string param_typename = 2;
     optional string default_value = 3;
+    optional SQLExpressionOrigin default_value_origin = 4;
   }
 
   enum Determinism {

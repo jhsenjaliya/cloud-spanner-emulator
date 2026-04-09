@@ -32,6 +32,7 @@
 #ifndef TRANSFORMER_FORWARD_TRANSFORMER_H_
 #define TRANSFORMER_FORWARD_TRANSFORMER_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>

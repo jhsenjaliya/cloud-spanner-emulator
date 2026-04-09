@@ -555,6 +555,27 @@ TEST_F(DdlTest, DisableChangeStreamPartitionModeOption) {
                        "Option partition_mode is not supported yet."));
 }
 
+TEST_F(DdlTest, DisableChangeStreamPerPlacementTvfOption) {
+  const std::string input =
+      "CREATE CHANGE STREAM ChangeStream FOR table1 WITH (per_placement_tvf = "
+      "true)";
+
+  interfaces::ParserBatchOutput parsed_statements =
+      base_helper_.Parser()->ParseBatch(
+          interfaces::ParserParamsBuilder(input).Build());
+  ABSL_CHECK_OK(parsed_statements.global_status());
+  ABSL_CHECK_EQ(parsed_statements.output().size(), 1);
+
+  absl::StatusOr<google::spanner::emulator::backend::ddl::DDLStatementList> statements =
+      base_helper_.Translator()->Translate(
+          parsed_statements,
+          {.enable_change_streams = true,
+           .enable_change_streams_per_placement_tvf_option = false});
+  EXPECT_THAT(statements,
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       "Option per_placement_tvf is not supported yet."));
+}
+
 TEST_F(DdlTest, CreateDatabaseForEmulator) {
   const std::string input = "CREATE DATABASE test_db";
 
@@ -610,6 +631,24 @@ TEST_F(DdlTest, DisableDropChangeStream) {
               StatusIs(
                   absl::StatusCode::kFailedPrecondition,
                   "<DROP CHANGE STREAM> statement is not supported."));
+}
+
+TEST_F(DdlTest, DisableDropFunction) {
+  const std::string input = "DROP FUNCTION foo";
+
+  interfaces::ParserBatchOutput parsed_statements =
+      base_helper_.Parser()->ParseBatch(
+          interfaces::ParserParamsBuilder(input).Build());
+  ABSL_CHECK_OK(parsed_statements.global_status());
+  ABSL_CHECK_EQ(parsed_statements.output().size(), 1);
+
+  absl::StatusOr<google::spanner::emulator::backend::ddl::DDLStatementList> statements =
+      base_helper_.Translator()->Translate(parsed_statements,
+                                           {.enable_create_function = false});
+
+  EXPECT_THAT(statements,
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       "<DROP FUNCTION> statement is not supported."));
 }
 
 TEST_F(DdlTest, DisableCreateSearchIndex) {

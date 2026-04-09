@@ -366,7 +366,10 @@ absl::Status AnalyzeColumnExpression(
     absl::flat_hash_set<const SchemaNode*>* dependent_sequences,
     bool allow_volatile_expression,
     absl::flat_hash_set<const SchemaNode*>* udf_dependencies,
-    bool* is_pending_commit_timestamp) {
+    bool* is_pending_commit_timestamp,
+    const zetasql::Type** expr_output_type) {
+  ZETASQL_RET_CHECK(expr_output_type == nullptr || target_type == nullptr);
+
   zetasql::SimpleTable simple_table(table->Name(), name_and_types);
 
   zetasql::AnalyzerOptions options =
@@ -406,6 +409,10 @@ absl::Status AnalyzeColumnExpression(
       schema, &simple_table, expression_use, dependent_column_names,
       allow_volatile_expression, udf_dependencies);
   ZETASQL_RETURN_IF_ERROR(output->resolved_expr()->Accept(&validator));
+
+  if (expr_output_type != nullptr) {
+    *expr_output_type = output->resolved_expr()->type();
+  }
 
   if (output->resolved_expr()->GetTreeDepth() >
       limits::kColumnExpressionMaxDepth) {

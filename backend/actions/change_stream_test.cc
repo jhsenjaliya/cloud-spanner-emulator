@@ -22,8 +22,10 @@
 #include <variant>
 #include <vector>
 
+#include "google/protobuf/descriptor.pb.h"
 #include "zetasql/public/json_value.h"
 #include "zetasql/public/numeric_value.h"
+#include "zetasql/public/type.h"
 #include "zetasql/public/types/type_factory.h"
 #include "zetasql/public/value.h"
 #include "gmock/gmock.h"
@@ -32,6 +34,8 @@
 #include "tests/common/proto_matchers.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
+#include "absl/strings/escaping.h"
+#include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 #include "absl/types/variant.h"
 #include "backend/actions/ops.h"
@@ -41,6 +45,7 @@
 #include "backend/schema/catalog/table.h"
 #include "tests/common/actions.h"
 #include "tests/common/schema_constructor.h"
+#include "tests/common/test.pb.h"
 #include "nlohmann/json_fwd.hpp"
 #include "nlohmann/json.hpp"
 namespace google {
@@ -61,6 +66,7 @@ using zetasql::values::Json;
 using zetasql::values::JsonArray;
 using zetasql::values::Numeric;
 using zetasql::values::NumericArray;
+using zetasql::values::Proto;
 using zetasql::values::String;
 
 class ChangeStreamTest : public test::ActionsTest {
@@ -577,9 +583,10 @@ TEST_F(ChangeStreamTest, AddWriteOpForDiffUserTablesForSameChangeStream) {
 
   // Set number_of_records_in_transaction in each DataChangeRecord after
   // finishing processing all operations
-  std::vector<WriteOp> write_ops =
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> write_ops,
       BuildMutation(&data_change_records_in_transaction_by_change_stream, 1,
-                    &last_mod_group_by_change_stream);
+                    &last_mod_group_by_change_stream));
   // Verify the number rebuilt WriteOps added to the transaction
   // buffer.
   ASSERT_EQ(write_ops.size(), 3);
@@ -633,9 +640,10 @@ TEST_F(ChangeStreamTest, AddWriteOpForDiffNonKeyColsForSameChangeStream) {
               ::zetasql_base::testing::IsOk());
   // Set number_of_records_in_transaction in each DataChangeRecord after
   // finishing processing all operations
-  std::vector<WriteOp> write_ops =
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> write_ops,
       BuildMutation(&data_change_records_in_transaction_by_change_stream, 1,
-                    &last_mod_group_by_change_stream);
+                    &last_mod_group_by_change_stream));
   // Verify the number of rebuilt WriteOps added to the transaction
   // buffer.
   EXPECT_EQ(write_ops.size(), 3);
@@ -685,9 +693,10 @@ TEST_F(ChangeStreamTest, AddWriteOpForDifferentChangeStreams) {
               ::zetasql_base::testing::IsOk());
   // Set number_of_records_in_transaction in each DataChangeRecord after
   // finishing processing all operations
-  std::vector<WriteOp> write_ops =
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> write_ops,
       BuildMutation(&data_change_records_in_transaction_by_change_stream, 1,
-                    &last_mod_group_by_change_stream);
+                    &last_mod_group_by_change_stream));
   // Insert to table2(string_col) tracked by cs1, Insert to table2(string_col)
   // tracked by cs2, Insert to table2(string_col) tracked by cs1, Insert to
   // table2(another_string_col) tracked by cs1 -> 3 DataChangeRecords
@@ -744,9 +753,10 @@ TEST_F(ChangeStreamTest,
               ::zetasql_base::testing::IsOk());
   // Set number_of_records_in_transaction in each DataChangeRecord after
   // finishing processing all operations
-  std::vector<WriteOp> write_ops =
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> write_ops,
       BuildMutation(&data_change_records_in_transaction_by_change_stream, 1,
-                    &last_mod_group_by_change_stream);
+                    &last_mod_group_by_change_stream));
   // Verify the number of rebuilt WriteOps added to the transaction
   // buffer.
   ASSERT_EQ(write_ops.size(), 2);
@@ -854,9 +864,10 @@ TEST_F(ChangeStreamTest, InsertUpdateDeleteUntrackedColumnsSameRow) {
               ::zetasql_base::testing::IsOk());
   // Set number_of_records_in_transaction in each DataChangeRecord after
   // finishing processing all operations
-  std::vector<WriteOp> write_ops =
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> write_ops,
       BuildMutation(&data_change_records_in_transaction_by_change_stream, 1,
-                    &last_mod_group_by_change_stream);
+                    &last_mod_group_by_change_stream));
   // Verify the number of rebuilt WriteOps added to the transaction
   // buffer.
   ASSERT_EQ(write_ops.size(), 2);
@@ -1230,6 +1241,93 @@ TEST_F(ChangeStreamTest, FloatValueAndTypes) {
   ASSERT_EQ(operation->values[17], zetasql::Value(String("")));
   // Verify is_system_transaction
   ASSERT_EQ(operation->values[18], zetasql::Value(Bool(false)));
+}
+
+TEST_F(ChangeStreamTest, ProtoValueAndTypes) {
+  // Setup proto schema
+  google::protobuf::FileDescriptorSet file_descriptor_set;
+  ::emulator::tests::common::Simple::descriptor()->file()->CopyTo(
+      file_descriptor_set.add_file());
+  std::string proto_descriptors = file_descriptor_set.SerializeAsString();
+
+  ZETASQL_ASSERT_OK_AND_ASSIGN(auto proto_schema,
+                       emulator::test::CreateSchemaFromDDL(
+                           {
+                               R"(
+              CREATE PROTO BUNDLE (
+                emulator.tests.common.Simple,
+                emulator.tests.common.TestEnum,
+              )
+          )",
+                               R"(
+              CREATE TABLE ProtoTable (
+                int64_col INT64 NOT NULL,
+                proto_col emulator.tests.common.Simple,
+                proto_arr ARRAY<emulator.tests.common.Simple>
+              ) PRIMARY KEY (int64_col)
+          )",
+                               R"(
+              CREATE CHANGE STREAM ChangeStream_ProtoTable FOR ProtoTable OPTIONS ( value_capture_type = 'NEW_VALUES' )
+          )"},
+                           &type_factory_, proto_descriptors));
+
+  const Table* proto_table = proto_schema->FindTable("ProtoTable");
+  const ChangeStream* proto_stream =
+      proto_schema->FindChangeStream("ChangeStream_ProtoTable");
+
+  set_up_partition_token_for_change_stream_partition_table(proto_stream,
+                                                           store());
+
+  const zetasql::Type* proto_type =
+      proto_table->FindColumn("proto_col")->GetType();
+
+  // Insert base table entry.
+  ::emulator::tests::common::Simple simple_proto;
+  simple_proto.set_field("test_field");
+  std::string encoded_proto =
+      absl::Base64Escape(simple_proto.SerializeAsString());
+
+  const zetasql::Type* proto_arr_type;
+  ZETASQL_ASSERT_OK(type_factory_.MakeArrayType(proto_type, &proto_arr_type));
+
+  std::vector<WriteOp> buffered_write_ops;
+  buffered_write_ops.push_back(
+      Insert(proto_table, Key({Int64(1)}), proto_table->columns(),
+             {Int64(1), Proto(proto_type->AsProto(), simple_proto),
+              zetasql::values::Array(
+                  proto_arr_type->AsArray(),
+                  {Proto(proto_type->AsProto(), simple_proto)})}));
+  ZETASQL_ASSERT_OK_AND_ASSIGN(std::vector<WriteOp> change_stream_write_ops,
+                       BuildChangeStreamWriteOps(
+                           proto_schema.get(), buffered_write_ops, store(), 1));
+
+  // Verify change stream entry is added to the transaction buffer.
+  ASSERT_EQ(change_stream_write_ops.size(), 1);
+  WriteOp op = change_stream_write_ops[0];
+  auto* operation = std::get_if<InsertOp>(&op);
+  ASSERT_NE(operation, nullptr);
+
+  // Verify column_types_type tags PROTO properly
+  JSON int_type;
+  int_type["code"] = "INT64";
+  JSON proto_json_type;
+  proto_json_type["code"] = "PROTO";
+  JSON proto_arr_json_type;
+  proto_arr_json_type["code"] = "ARRAY";
+  proto_arr_json_type["array_element_type"]["code"] = "PROTO";
+  ASSERT_EQ(operation->values[7],
+            zetasql::values::Array(
+                zetasql::types::StringArrayType(),
+                {zetasql::Value(String(int_type.dump())),
+                 zetasql::Value(String(proto_json_type.dump())),
+                 zetasql::Value(String(proto_arr_json_type.dump()))}));
+
+  // Verify mods includes Base64 representations
+  zetasql::Value mod_new_values = operation->values[11];
+  ASSERT_EQ(mod_new_values.element(0),
+            zetasql::Value(String(
+                absl::StrCat("{\"proto_arr\":[\"", encoded_proto,
+                             "\"],\"proto_col\":\"", encoded_proto, "\"}"))));
 }
 
 }  // namespace

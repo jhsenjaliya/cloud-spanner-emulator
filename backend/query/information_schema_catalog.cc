@@ -673,6 +673,30 @@ void InformationSchemaCatalog::FillDatabaseOptionsTable() {
     rows.push_back(GetRowFromRowKVs(table, specific_kvs));
   }
 
+  if (default_schema_->options() != nullptr &&
+      default_schema_->options()->version_retention_period().has_value()) {
+    specific_kvs.clear();
+    specific_kvs[kSchemaName] = DialectDefaultSchema();
+    specific_kvs[kOptionType] = String(
+        dialect_ == DatabaseDialect::POSTGRESQL ? kCharacterVarying : kString);
+    specific_kvs[kOptionName] = String(ddl::kVersionRetentionPeriodOptionName);
+    specific_kvs[kOptionValue] =
+        String(default_schema_->options()->version_retention_period().value());
+    rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+  }
+
+  if (default_schema_->options() != nullptr &&
+      default_schema_->options()->columnar_policy().has_value()) {
+    specific_kvs.clear();
+    specific_kvs[kSchemaName] = DialectDefaultSchema();
+    specific_kvs[kOptionType] = String(
+        dialect_ == DatabaseDialect::POSTGRESQL ? kCharacterVarying : kString);
+    specific_kvs[kOptionName] = String(ddl::kColumnarPolicyOptionName);
+    specific_kvs[kOptionValue] =
+        String(default_schema_->options()->columnar_policy().value());
+    rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+  }
+
   table->SetContents(rows);
 }
 

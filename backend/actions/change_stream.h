@@ -101,7 +101,7 @@ absl::Status LogTableMod(
 // Build DataChangeRecords with ModGroups, set the
 // number_of_records_in_transaction field of DataChangeRecords, and then convert
 // DataChangeRecords to write_ops for change_stream_data_table.
-std::vector<WriteOp> BuildMutation(
+absl::StatusOr<std::vector<WriteOp>> BuildMutation(
     absl::flat_hash_map<const ChangeStream*, std::vector<DataChangeRecord>>*
         data_change_records_in_transaction_by_change_stream,
     TransactionID transaction_id,

@@ -715,7 +715,21 @@ static absl::Status GetProcsByNameFromUserCatalog(
       found_procs.insert(found_procs.end(), new_procs.begin(), new_procs.end());
     }
   } else {
-    return absl::OkStatus();
+    const zetasql::Function* udf;
+    status = catalog->FindFunction(name_path, &udf);
+    // NotFound is fine, just swallow it. Any other error is unexpected.
+    if (absl::IsNotFound(status) || !udf->IsScalar()) {
+      return absl::OkStatus();
+    } else if (!status.ok()) {
+      return status;
+    }
+    if (schema_name &&
+        !adapter->GetOrGenerateOidFromNamespaceName(schema_name).ok()) {
+      return status;
+    }
+    ZETASQL_ASSIGN_OR_RETURN(std::vector<const FormData_pg_proc*> new_procs,
+                     BuildPgProcsFromUDF(udf, adapter));
+    found_procs.insert(found_procs.end(), new_procs.begin(), new_procs.end());
   }
   // Copy our results into the output.
   *outcount = found_procs.size();

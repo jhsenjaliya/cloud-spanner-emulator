@@ -2639,6 +2639,47 @@ TEST_P(SchemaUpdaterTest, CreateSearchIndexExceedsMaxKeyColumns) {
               StatusIs(error::TooManyKeys("Index", "Idx", 17, 16)));
 }
 
+TEST_P(SchemaUpdaterTest, GeneratedColumnNonDeterministicFunction) {
+  if (GetParam() == POSTGRESQL) {
+    EXPECT_THAT(
+        CreateSchema(
+            {
+                R"sql(
+  CREATE SEQUENCE Seq BIT_REVERSED_POSITIVE
+  )sql",
+                R"sql(
+  CREATE TABLE T (
+    id bigint PRIMARY KEY,
+    val bigint GENERATED ALWAYS AS (nextval('seq')) STORED
+  )
+  )sql"},
+            /*proto_descriptor_bytes=*/"",
+            /*dialect=*/POSTGRESQL,
+            /*use_gsql_to_pg_translation=*/false),
+        StatusIs(error::GeneratedColumnDefinitionParseError(
+            "t", "val",
+            error::NonDeterministicFunctionInColumnExpression(
+                "SPANNER:GET_NEXT_SEQUENCE_VALUE", "stored generated columns")
+                .message())));
+  } else {
+    EXPECT_THAT(
+        CreateSchema({
+            R"sql(
+  CREATE SEQUENCE Seq BIT_REVERSED_POSITIVE
+  )sql",
+            R"sql(
+  CREATE TABLE T (
+    id INT64,
+    val INT64 AS (GET_NEXT_SEQUENCE_VALUE(SEQUENCE Seq)) STORED,
+  ) PRIMARY KEY(UserId)
+  )sql"}),
+        StatusIs(error::GeneratedColumnDefinitionParseError(
+            "T", "val",
+            error::NonDeterministicFunctionInColumnExpression(
+                "SPANNER:GET_NEXT_SEQUENCE_VALUE", "stored generated columns")
+                .message())));
+  }
+}
 }  // namespace
 
 }  // namespace test

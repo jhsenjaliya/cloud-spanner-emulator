@@ -442,6 +442,11 @@ void DumpChangeStream(const ChangeStream* change_stream,
     set_option->set_option_name(ddl::kChangeStreamExcludeTtlDeletesOptionName);
     set_option->set_bool_value(*change_stream->exclude_ttl_deletes());
   }
+  if (change_stream->allow_txn_exclusion().has_value()) {
+    ddl::SetOption* set_option = create_change_stream.add_set_options();
+    set_option->set_option_name(ddl::kChangeStreamAllowTxnExclusionOptionName);
+    set_option->set_bool_value(*change_stream->allow_txn_exclusion());
+  }
 }
 
 void DumpSequence(const Sequence* sequence,
