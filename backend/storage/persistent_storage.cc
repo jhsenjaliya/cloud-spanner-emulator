@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // C++17
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include "zetasql/public/value.h"
+#include "zetasql/base/status_macros.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -135,6 +137,15 @@ std::string ExtractColumnIdFromLevelDBKey(const leveldb::Slice& ldb_key) {
   return std::string(data + offset, column_id_len);
 }
 
+// Checks the iterator status after a scan loop. Returns an error if the
+// iterator encountered an I/O or corruption error during iteration.
+absl::Status CheckIteratorStatus(const leveldb::Iterator& it) {
+  if (!it.status().ok()) {
+    return LevelDBStatusToAbsl(it.status());
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 PersistentStorage::PersistentStorage(std::unique_ptr<leveldb::DB> db)
@@ -242,6 +253,7 @@ zetasql::Value PersistentStorage::GetCellValueAtTimestamp(
   // We want the largest timestamp <= target, so we seek to target+1 and
   // go back, or seek to target and check.
   it->Seek(seek_key);
+  if (!it->status().ok()) return zetasql::Value();
 
   // Check if we landed exactly on the target or need to go to previous.
   if (it->Valid()) {
@@ -263,6 +275,7 @@ zetasql::Value PersistentStorage::GetCellValueAtTimestamp(
     // Past the end of the database, go to the last entry.
     it->SeekToLast();
   }
+  if (!it->status().ok()) return zetasql::Value();
 
   // Now check if the current position is within the right cell prefix.
   if (it->Valid()) {
@@ -310,6 +323,8 @@ std::vector<std::string> PersistentStorage::CollectKeysInRange(
       unique_keys.insert(encoded_key);
     }
   }
+  // On I/O error, return whatever we collected so far (best effort).
+  // Callers that need strict correctness check via Exists()/Lookup().
 
   return std::vector<std::string>(unique_keys.begin(), unique_keys.end());
 }
@@ -351,6 +366,42 @@ absl::Status PersistentStorage::Lookup(
   return absl::OkStatus();
 }
 
+// Decodes a Key from the serialized __key_data__ bytes.
+static Key DecodeKeyData(const zetasql::Value& key_data) {
+  Key reconstructed_key;
+  if (!key_data.is_valid() || key_data.is_null()) return reconstructed_key;
+
+  std::string data = key_data.bytes_value();
+  const char* ptr = data.data();
+  const char* end = ptr + data.size();
+  if (end - ptr < 4) return reconstructed_key;
+
+  const auto* up = reinterpret_cast<const unsigned char*>(ptr);
+  int32_t num_cols = static_cast<int32_t>(up[0]) |
+                     (static_cast<int32_t>(up[1]) << 8) |
+                     (static_cast<int32_t>(up[2]) << 16) |
+                     (static_cast<int32_t>(up[3]) << 24);
+  ptr += 4;
+  for (int i = 0; i < num_cols && ptr < end; ++i) {
+    if (end - ptr < 2) break;  // Need at least 2 bytes for desc + nulls_last.
+    bool desc = (*ptr++ != 0);
+    bool nulls_last = (*ptr++ != 0);
+    if (end - ptr < 4) break;
+    const auto* vp = reinterpret_cast<const unsigned char*>(ptr);
+    int32_t val_len = static_cast<int32_t>(vp[0]) |
+                      (static_cast<int32_t>(vp[1]) << 8) |
+                      (static_cast<int32_t>(vp[2]) << 16) |
+                      (static_cast<int32_t>(vp[3]) << 24);
+    ptr += 4;
+    if (end - ptr < val_len) break;
+    std::string encoded_val(ptr, val_len);
+    ptr += val_len;
+    zetasql::Value col_val = DecodeValue(encoded_val);
+    reconstructed_key.AddColumn(col_val, desc, nulls_last);
+  }
+  return reconstructed_key;
+}
+
 absl::Status PersistentStorage::Read(
     absl::Time timestamp, const TableID& table_id, const KeyRange& key_range,
     const std::vector<ColumnID>& column_ids,
@@ -372,67 +423,126 @@ absl::Status PersistentStorage::Read(
   }
 
   std::string start_encoded = EncodeKey(key_range.start_key());
+  // Use EncodeKeyForPrefixLimit for prefix-limit keys (e.g. from
+  // KeyRange::Point), otherwise use EncodeKey for regular limit keys.
+  // A prefix-limit key has the same columns but compares greater --
+  // detected when both encode identically but the limit compares greater.
+  // When both are empty (Key::Empty/Infinity), keep limit empty to mean
+  // "no upper bound" (the original convention used by CollectKeysInRange).
   std::string limit_encoded = EncodeKey(key_range.limit_key());
+  if (!limit_encoded.empty() &&
+      limit_encoded == EncodeKey(key_range.start_key()) &&
+      key_range.start_key() < key_range.limit_key()) {
+    limit_encoded = EncodeKeyForPrefixLimit(key_range.limit_key());
+  }
+  std::string table_prefix = MakeTablePrefix(table_id);
+  std::string seek_start = MakeRowPrefix(table_id, start_encoded);
+  std::string seek_limit = MakeRowPrefix(table_id, limit_encoded);
+  std::string ts_encoded = EncodeTimestamp(timestamp);
 
-  // Collect all unique keys in the range.
-  std::vector<std::string> encoded_keys =
-      CollectKeysInRange(table_id, start_encoded, limit_encoded);
+  // Build the set of columns we need to collect (requested + _exists +
+  // __key_data__).
+  std::set<std::string> needed_columns;
+  needed_columns.insert(kExistsColumn);
+  needed_columns.insert("__key_data__");
+  for (const auto& col : column_ids) {
+    needed_columns.insert(col);
+  }
 
-  for (const std::string& encoded_key : encoded_keys) {
-    if (!Exists(table_id, encoded_key, timestamp)) {
+  // Single-pass scan: iterate through the range and collect the best
+  // (latest <= timestamp) value for each (encoded_key, column) pair.
+  struct CellData {
+    std::string best_value;       // encoded value from LevelDB
+    std::string best_timestamp;   // 8-byte encoded timestamp of best match
+  };
+  // Map: encoded_key -> (column_id -> best cell data)
+  std::map<std::string, std::map<std::string, CellData>> rows_data;
+
+  std::unique_ptr<leveldb::Iterator> it(
+      db_->NewIterator(leveldb::ReadOptions()));
+  for (it->Seek(seek_start); it->Valid(); it->Next()) {
+    leveldb::Slice ldb_key = it->key();
+    if (!ldb_key.starts_with(table_prefix)) break;
+    std::string ldb_key_str = ldb_key.ToString();
+    if (!limit_encoded.empty() && ldb_key_str >= seek_limit) break;
+
+    // Parse the LevelDB key components.
+    const char* kdata = ldb_key.data();
+    size_t ksize = ldb_key.size();
+    size_t offset = 0;
+
+    // Read table_id.
+    uint32_t tid_len;
+    if (!ReadLengthPrefix(kdata, ksize, offset, &tid_len)) continue;
+    offset += 4 + tid_len;
+
+    // Read encoded_key.
+    uint32_t ekey_len;
+    if (!ReadLengthPrefix(kdata, ksize, offset, &ekey_len)) continue;
+    size_t ekey_start = offset + 4;
+    offset += 4 + ekey_len;
+    if (offset > ksize) continue;
+    std::string encoded_key(kdata + ekey_start, ekey_len);
+
+    // Read column_id.
+    uint32_t col_len;
+    if (!ReadLengthPrefix(kdata, ksize, offset, &col_len)) continue;
+    size_t col_start = offset + 4;
+    offset += 4 + col_len;
+    if (offset > ksize) continue;
+    std::string col_id(kdata + col_start, col_len);
+
+    // Read timestamp (last 8 bytes).
+    if (offset + 8 > ksize) continue;
+    std::string entry_ts(kdata + offset, 8);
+
+    // Only consider columns we need.
+    if (needed_columns.find(col_id) == needed_columns.end()) continue;
+
+    // Only consider entries at or before the target timestamp.
+    // Timestamps are encoded ascending, so entry_ts <= ts_encoded means
+    // the entry is at or before our target.
+    if (entry_ts > ts_encoded) continue;
+
+    // Keep the latest version at or before timestamp.
+    auto& cell = rows_data[encoded_key][col_id];
+    if (cell.best_timestamp.empty() || entry_ts > cell.best_timestamp) {
+      cell.best_value = it->value().ToString();
+      cell.best_timestamp = entry_ts;
+    }
+  }
+  ZETASQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
+
+  // Build result rows from collected data.
+  for (auto& [encoded_key, columns] : rows_data) {
+    // Check _exists.
+    auto exists_it = columns.find(std::string(kExistsColumn));
+    if (exists_it == columns.end()) continue;
+    zetasql::Value exists_val = DecodeValue(exists_it->second.best_value);
+    // Match Exists() logic: valid AND not-null AND true.
+    if (!exists_val.is_valid() || exists_val.is_null() ||
+        !exists_val.bool_value()) {
       continue;
     }
 
+    // Collect column values in order.
     std::vector<zetasql::Value> values;
     values.reserve(column_ids.size());
     for (const ColumnID& column_id : column_ids) {
-      values.emplace_back(
-          GetCellValueAtTimestamp(table_id, encoded_key, column_id, timestamp));
+      auto col_it = columns.find(column_id);
+      if (col_it != columns.end()) {
+        values.emplace_back(DecodeValue(col_it->second.best_value));
+      } else {
+        values.emplace_back(zetasql::Value());
+      }
     }
 
-    // Reconstruct the Key from "__key_data__", which stores serialized key
-    // columns written alongside every row for round-trip reconstruction.
+    // Reconstruct key from __key_data__.
     Key reconstructed_key;
-    zetasql::Value key_data = GetCellValueAtTimestamp(
-        table_id, encoded_key, "__key_data__", timestamp);
-    if (key_data.is_valid() && !key_data.is_null()) {
-      // Decode the key from the stored bytes.
-      // The __key_data__ column stores a serialized representation of the
-      // key columns as: num_columns, then for each column:
-      //   is_descending(1 byte), is_nulls_last(1 byte), encoded_value
-      std::string data = key_data.bytes_value();
-      const char* ptr = data.data();
-      const char* end = ptr + data.size();
-      if (ptr < end) {
-        int32_t num_cols;
-        if (end - ptr >= 4) {
-          // Decode num_cols as explicit little-endian.
-          const auto* up = reinterpret_cast<const unsigned char*>(ptr);
-          num_cols = static_cast<int32_t>(up[0]) |
-                     (static_cast<int32_t>(up[1]) << 8) |
-                     (static_cast<int32_t>(up[2]) << 16) |
-                     (static_cast<int32_t>(up[3]) << 24);
-          ptr += 4;
-          for (int i = 0; i < num_cols && ptr < end; ++i) {
-            bool desc = (*ptr++ != 0);
-            bool nulls_last = (*ptr++ != 0);
-            // Read the encoded value length as explicit little-endian.
-            int32_t val_len;
-            if (end - ptr < 4) break;
-            const auto* vp = reinterpret_cast<const unsigned char*>(ptr);
-            val_len = static_cast<int32_t>(vp[0]) |
-                      (static_cast<int32_t>(vp[1]) << 8) |
-                      (static_cast<int32_t>(vp[2]) << 16) |
-                      (static_cast<int32_t>(vp[3]) << 24);
-            ptr += 4;
-            if (end - ptr < val_len) break;
-            std::string encoded_val(ptr, val_len);
-            ptr += val_len;
-            zetasql::Value col_val = DecodeValue(encoded_val);
-            reconstructed_key.AddColumn(col_val, desc, nulls_last);
-          }
-        }
-      }
+    auto kd_it = columns.find("__key_data__");
+    if (kd_it != columns.end()) {
+      zetasql::Value key_data = DecodeValue(kd_it->second.best_value);
+      reconstructed_key = DecodeKeyData(key_data);
     }
 
     rows.emplace_back(std::make_pair(reconstructed_key, std::move(values)));
@@ -508,6 +618,27 @@ absl::Status PersistentStorage::Write(
     return LevelDBStatusToAbsl(status);
   }
 
+  // Remove expired versions for each cell that was written.
+  leveldb::WriteBatch gc_batch;
+  std::string row_prefix;
+  AppendLengthPrefixed(&row_prefix, table_id);
+  AppendLengthPrefixed(&row_prefix, encoded_key);
+
+  std::string exists_prefix = row_prefix;
+  AppendLengthPrefixed(&exists_prefix, std::string(kExistsColumn));
+  RemoveExpiredVersions(exists_prefix, timestamp, &gc_batch);
+
+  std::string key_data_prefix = row_prefix;
+  AppendLengthPrefixed(&key_data_prefix, std::string("__key_data__"));
+  RemoveExpiredVersions(key_data_prefix, timestamp, &gc_batch);
+
+  for (const ColumnID& column_id : column_ids) {
+    std::string cell_prefix = row_prefix;
+    AppendLengthPrefixed(&cell_prefix, column_id);
+    RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
+  }
+  db_->Write(leveldb::WriteOptions(), &gc_batch);  // Best-effort GC.
+
   return absl::OkStatus();
 }
 
@@ -527,12 +658,26 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
   }
 
   std::string start_encoded = EncodeKey(key_range.start_key());
+  // Use EncodeKeyForPrefixLimit for prefix-limit keys (e.g. from
+  // KeyRange::Point), otherwise use EncodeKey for regular limit keys.
+  // A prefix-limit key has the same columns but compares greater --
+  // detected when both encode identically but the limit compares greater.
+  // When both are empty (Key::Empty/Infinity), keep limit empty to mean
+  // "no upper bound" (the original convention used by CollectKeysInRange).
   std::string limit_encoded = EncodeKey(key_range.limit_key());
+  if (!limit_encoded.empty() &&
+      limit_encoded == EncodeKey(key_range.start_key()) &&
+      key_range.start_key() < key_range.limit_key()) {
+    limit_encoded = EncodeKeyForPrefixLimit(key_range.limit_key());
+  }
 
   std::vector<std::string> encoded_keys =
       CollectKeysInRange(table_id, start_encoded, limit_encoded);
 
   leveldb::WriteBatch batch;
+
+  // Track seen columns per key for GC pass.
+  std::map<std::string, std::set<std::string>> per_key_columns;
 
   for (const std::string& encoded_key : encoded_keys) {
     if (!Exists(table_id, encoded_key, timestamp)) {
@@ -550,7 +695,7 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
     std::unique_ptr<leveldb::Iterator> it(
         db_->NewIterator(leveldb::ReadOptions()));
 
-    std::set<std::string> seen_columns;
+    std::set<std::string>& seen_columns = per_key_columns[encoded_key];
     for (it->Seek(row_prefix); it->Valid(); it->Next()) {
       leveldb::Slice ldb_key = it->key();
       if (!ldb_key.starts_with(row_prefix)) break;
@@ -568,6 +713,7 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
         batch.Put(del_ldb_key, invalid_value);
       }
     }
+    ZETASQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
   }
 
   leveldb::Status status =
@@ -576,7 +722,68 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
     return LevelDBStatusToAbsl(status);
   }
 
+  // Remove expired versions for all cells in deleted rows.
+  leveldb::WriteBatch gc_batch;
+  for (const auto& [encoded_key, columns] : per_key_columns) {
+    std::string row_prefix = MakeRowPrefix(table_id, encoded_key);
+
+    std::string exists_prefix = row_prefix;
+    AppendLengthPrefixed(&exists_prefix, std::string(kExistsColumn));
+    RemoveExpiredVersions(exists_prefix, timestamp, &gc_batch);
+
+    std::string key_data_prefix = row_prefix;
+    AppendLengthPrefixed(&key_data_prefix, std::string("__key_data__"));
+    RemoveExpiredVersions(key_data_prefix, timestamp, &gc_batch);
+
+    for (const std::string& col_id : columns) {
+      std::string cell_prefix = row_prefix;
+      AppendLengthPrefixed(&cell_prefix, col_id);
+      RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
+    }
+  }
+  db_->Write(leveldb::WriteOptions(), &gc_batch);  // Best-effort GC.
+
   return absl::OkStatus();
+}
+
+void PersistentStorage::RemoveExpiredVersions(
+    const std::string& cell_prefix, absl::Time timestamp,
+    leveldb::WriteBatch* batch) {
+  absl::MutexLock lock(&version_retention_period_mu_);
+  absl::Time cutoff = timestamp - version_retention_period_;
+  std::string cutoff_ts = EncodeTimestamp(cutoff);
+  std::string cutoff_key = cell_prefix + cutoff_ts;
+
+  // Scan all versions of this cell up to the cutoff timestamp.
+  // Keep the most recent version at or before cutoff (needed for reads in the
+  // retention window), delete everything older.
+  std::unique_ptr<leveldb::Iterator> it(
+      db_->NewIterator(leveldb::ReadOptions()));
+  it->Seek(cell_prefix);
+
+  std::vector<std::string> keys_to_delete;
+  std::string last_key_before_cutoff;
+
+  for (; it->Valid(); it->Next()) {
+    leveldb::Slice key = it->key();
+    if (!key.starts_with(cell_prefix)) break;
+
+    std::string key_str = key.ToString();
+    if (key_str <= cutoff_key) {
+      if (!last_key_before_cutoff.empty()) {
+        keys_to_delete.push_back(last_key_before_cutoff);
+      }
+      last_key_before_cutoff = key_str;
+    } else {
+      break;  // Past the cutoff, remaining versions are within retention.
+    }
+  }
+  if (!it->status().ok()) return;  // Skip GC on I/O error.
+
+  // Delete all versions except the most recent one before cutoff.
+  for (const auto& key : keys_to_delete) {
+    batch->Delete(key);
+  }
 }
 
 void PersistentStorage::SetVersionRetentionPeriod(
@@ -602,6 +809,7 @@ void PersistentStorage::CleanUpDeletedTables(absl::Time timestamp) {
       if (!db_it->key().starts_with(table_prefix)) break;
       batch.Delete(db_it->key());
     }
+    if (!db_it->status().ok()) break;  // Stop cleanup on I/O error.
     db_->Write(leveldb::WriteOptions(), &batch);
 
     it = dropped_tables_.erase(it);
@@ -633,6 +841,7 @@ void PersistentStorage::CleanUpDeletedColumns(absl::Time timestamp) {
         batch.Delete(ldb_key);
       }
     }
+    if (!db_it->status().ok()) break;  // Stop cleanup on I/O error.
     db_->Write(leveldb::WriteOptions(), &batch);
 
     it = dropped_columns_.erase(it);
