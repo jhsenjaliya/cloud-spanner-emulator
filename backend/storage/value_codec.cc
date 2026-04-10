@@ -274,6 +274,7 @@ zetasql::Value DecodeValue(const std::string& encoded) {
     case kTagString: {
       if (remaining < 4) return zetasql::Value();
       int32_t len = ReadInt32LE(data);
+      if (len < 0) return zetasql::Value();
       data += sizeof(int32_t);
       if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
       return zetasql::values::String(std::string(data, len));
@@ -282,6 +283,7 @@ zetasql::Value DecodeValue(const std::string& encoded) {
     case kTagBytes: {
       if (remaining < 4) return zetasql::Value();
       int32_t len = ReadInt32LE(data);
+      if (len < 0) return zetasql::Value();
       data += sizeof(int32_t);
       if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
       return zetasql::values::Bytes(std::string(data, len));
@@ -304,6 +306,7 @@ zetasql::Value DecodeValue(const std::string& encoded) {
     case kTagNumeric: {
       if (remaining < 4) return zetasql::Value();
       int32_t len = ReadInt32LE(data);
+      if (len < 0) return zetasql::Value();
       data += sizeof(int32_t);
       if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
       auto status_or =
@@ -318,6 +321,7 @@ zetasql::Value DecodeValue(const std::string& encoded) {
     case kTagJson: {
       if (remaining < 4) return zetasql::Value();
       int32_t len = ReadInt32LE(data);
+      if (len < 0) return zetasql::Value();
       data += sizeof(int32_t);
       if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
       auto json_value = zetasql::JSONValue::ParseJSONString(

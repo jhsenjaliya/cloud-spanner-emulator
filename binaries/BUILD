@@ -33,11 +33,15 @@ cc_binary(
         "-static-libstdc++",
     ],
     deps = [
+        "//backend/schema/updater:schema_updater",
         "//common:config",
+        "//frontend/persistence:metadata_store",
         "//frontend/server",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/strings",
+        "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
+        "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_proto",
         "@com_google_zetasql//zetasql/base",
     ],
 )

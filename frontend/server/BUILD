@@ -121,11 +121,13 @@ cc_library(
     ],
     deps = [
         "//common:clock",
+        "//common:config",
         "//frontend/collections:database_manager",
         "//frontend/collections:instance_manager",
         "//frontend/collections:multiplexed_session_transaction_manager",
         "//frontend/collections:operation_manager",
         "//frontend/collections:session_manager",
+        "//frontend/persistence:metadata_store",
         "@com_github_grpc_grpc//:grpc++",
     ],
 )
