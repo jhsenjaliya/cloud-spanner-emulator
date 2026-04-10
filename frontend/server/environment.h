@@ -20,11 +20,13 @@
 #include <memory>
 
 #include "common/clock.h"
+#include "common/config.h"
 #include "frontend/collections/database_manager.h"
 #include "frontend/collections/instance_manager.h"
 #include "frontend/collections/multiplexed_session_transaction_manager.h"
 #include "frontend/collections/operation_manager.h"
 #include "frontend/collections/session_manager.h"
+#include "frontend/persistence/metadata_store.h"
 
 namespace google {
 namespace spanner {
@@ -40,7 +42,12 @@ class ServerEnv {
         instance_manager_(new InstanceManager()),
         operation_manager_(new OperationManager()),
         session_manager_(new SessionManager(clock_.get())),
-        mux_txn_manager_(new MultiplexedSessionTransactionManager()) {}
+        mux_txn_manager_(new MultiplexedSessionTransactionManager()) {
+    std::string data_dir = config::data_dir();
+    if (!data_dir.empty()) {
+      metadata_store_ = std::make_unique<MetadataStore>(data_dir);
+    }
+  }
 
   Clock* clock() { return clock_.get(); }
   DatabaseManager* database_manager() { return database_manager_.get(); }
@@ -50,6 +57,7 @@ class ServerEnv {
   MultiplexedSessionTransactionManager* mux_txn_manager() {
     return mux_txn_manager_.get();
   }
+  MetadataStore* metadata_store() { return metadata_store_.get(); }
 
  private:
   std::unique_ptr<Clock> clock_;
@@ -58,6 +66,7 @@ class ServerEnv {
   std::unique_ptr<OperationManager> operation_manager_;
   std::unique_ptr<SessionManager> session_manager_;
   std::unique_ptr<MultiplexedSessionTransactionManager> mux_txn_manager_;
+  std::unique_ptr<MetadataStore> metadata_store_;
 };
 
 }  // namespace frontend
