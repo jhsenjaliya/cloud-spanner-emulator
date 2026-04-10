@@ -228,7 +228,9 @@ TEST_F(PersistentStorageTest, LookupByTimestamp) {
   EXPECT_THAT(values, testing::ElementsAre(String("value-1")));
 
   // Before write timestamp should not find the value.
-  absl::Time before_ts = write_ts - absl::Nanoseconds(1);
+  // Use microsecond delta since PersistentStorage encodes timestamps in
+  // microsecond precision (absl::ToUnixMicros).
+  absl::Time before_ts = write_ts - absl::Microseconds(1);
   EXPECT_THAT(storage_->Lookup(before_ts, kTableId0, Key({Int64(1)}),
                                {kColumnID}, &values),
               zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
