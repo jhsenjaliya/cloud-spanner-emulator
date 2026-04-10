@@ -43,6 +43,11 @@ ABSL_FLAG(bool, disable_query_null_filtered_index_check, false,
           "to disable this check per query, instead of disabling this check "
           "for all the queries at once.");
 
+ABSL_FLAG(std::string, data_dir, "",
+          "Directory path for persistent data storage. When empty (default), "
+          "the emulator uses in-memory storage. When set, the emulator uses "
+          "LevelDB-backed persistent storage at the specified directory.");
+
 ABSL_FLAG(
     int, abort_current_transaction_probability, 20,
     "The probability that the emulator will try to abort the current "
@@ -75,6 +80,8 @@ int abort_current_transaction_probability() {
 void set_abort_current_transaction_probability(int probability) {
   absl::SetFlag(&FLAGS_abort_current_transaction_probability, probability);
 }
+
+std::string data_dir() { return absl::GetFlag(FLAGS_data_dir); }
 
 }  // namespace config
 }  // namespace emulator
