@@ -105,6 +105,53 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "key_codec",
+    srcs = ["key_codec.cc"],
+    hdrs = ["key_codec.h"],
+    deps = [
+        "//backend/datamodel:key",
+        "@com_google_absl//absl/time",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
+cc_library(
+    name = "value_codec",
+    srcs = ["value_codec.cc"],
+    hdrs = ["value_codec.h"],
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_zetasql//zetasql/public:json_value",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
+cc_library(
+    name = "persistent_storage",
+    srcs = ["persistent_storage.cc"],
+    hdrs = ["persistent_storage.h"],
+    deps = [
+        ":in_memory_iterator",
+        ":iterator",
+        ":key_codec",
+        ":storage",
+        ":value_codec",
+        "//backend/common:ids",
+        "//backend/datamodel:key",
+        "//backend/datamodel:key_range",
+        "//common:errors",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_leveldb//:leveldb",
+        "@com_google_zetasql//zetasql/public:value",
+    ],
+)
+
 cc_test(
     name = "in_memory_iterator_test",
     srcs = [

@@ -54,6 +54,11 @@ int abort_current_transaction_probability();
 
 void set_abort_current_transaction_probability(int probability);
 
+// Returns the directory path for persistent data storage.
+// When empty (default), the emulator uses in-memory storage.
+// When set, the emulator uses LevelDB-backed persistent storage.
+std::string data_dir();
+
 }  // namespace config
 }  // namespace emulator
 }  // namespace spanner

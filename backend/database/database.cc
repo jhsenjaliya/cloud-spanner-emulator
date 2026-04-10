@@ -43,10 +43,12 @@
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/schema/updater/scoped_schema_change_lock.h"
 #include "backend/storage/in_memory_storage.h"
+#include "backend/storage/persistent_storage.h"
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
 #include "common/clock.h"
+#include "common/config.h"
 #include "common/errors.h"
 #include "absl/status/status.h"
 #include "zetasql/base/status_macros.h"
@@ -67,7 +69,19 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
   auto database = absl::WrapUnique(new Database());
   database->clock_ = clock;
   database->database_id_ = database_id;
-  database->storage_ = std::make_unique<InMemoryStorage>();
+  std::string data_dir = config::data_dir();
+  if (!data_dir.empty()) {
+    // Use persistent storage with a per-database subdirectory.
+    std::string db_data_dir =
+        absl::StrCat(data_dir, "/", database_id, "/storage");
+    auto persistent_storage = PersistentStorage::Create(db_data_dir);
+    if (!persistent_storage.ok()) {
+      return persistent_storage.status();
+    }
+    database->storage_ = std::move(*persistent_storage);
+  } else {
+    database->storage_ = std::make_unique<InMemoryStorage>();
+  }
   database->lock_manager_ = std::make_unique<LockManager>(clock);
   database->type_factory_ = std::make_unique<zetasql::TypeFactory>();
   database->action_manager_ = std::make_unique<ActionManager>();
