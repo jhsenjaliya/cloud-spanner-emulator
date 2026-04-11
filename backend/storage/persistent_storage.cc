@@ -301,7 +301,6 @@ std::vector<std::string> PersistentStorage::CollectKeysInRange(
     const std::string& limit_encoded) const {
   std::string table_prefix = MakeTablePrefix(table_id);
   std::string seek_start = MakeRowPrefix(table_id, start_encoded);
-  std::string seek_limit = MakeRowPrefix(table_id, limit_encoded);
 
   std::set<std::string> unique_keys;
   std::unique_ptr<leveldb::Iterator> it(
@@ -309,19 +308,24 @@ std::vector<std::string> PersistentStorage::CollectKeysInRange(
 
   for (it->Seek(seek_start); it->Valid(); it->Next()) {
     leveldb::Slice ldb_key = it->key();
-    std::string ldb_key_str = ldb_key.ToString();
 
     // Stop if we've passed the table prefix.
     if (!ldb_key.starts_with(table_prefix)) break;
 
-    // Stop if we've reached or passed the limit.
-    if (!limit_encoded.empty() && ldb_key_str >= seek_limit) break;
-
     // Extract the encoded key from the LevelDB key.
     std::string encoded_key = ExtractEncodedKeyFromLevelDBKey(ldb_key);
-    if (!encoded_key.empty()) {
-      unique_keys.insert(encoded_key);
-    }
+    if (encoded_key.empty()) continue;
+
+    // Compare the extracted encoded key directly against limit_encoded.
+    // We must NOT compare the full LevelDB key against
+    // MakeRowPrefix(table_id, limit_encoded) because EncodeKeyForPrefixLimit
+    // appends 0xFF bytes, changing the byte length. The 4-byte big-endian
+    // length prefix in MakeRowPrefix would then differ (e.g. 0x09 vs 0x11),
+    // causing ALL subsequent rows to sort before the limit — effectively
+    // scanning the entire table instead of just the target range.
+    if (!limit_encoded.empty() && encoded_key >= limit_encoded) break;
+
+    unique_keys.insert(encoded_key);
   }
   // On I/O error, return whatever we collected so far (best effort).
   // Callers that need strict correctness check via Exists()/Lookup().
@@ -437,7 +441,6 @@ absl::Status PersistentStorage::Read(
   }
   std::string table_prefix = MakeTablePrefix(table_id);
   std::string seek_start = MakeRowPrefix(table_id, start_encoded);
-  std::string seek_limit = MakeRowPrefix(table_id, limit_encoded);
   std::string ts_encoded = EncodeTimestamp(timestamp);
 
   // Build the set of columns we need to collect (requested + _exists +
@@ -463,8 +466,6 @@ absl::Status PersistentStorage::Read(
   for (it->Seek(seek_start); it->Valid(); it->Next()) {
     leveldb::Slice ldb_key = it->key();
     if (!ldb_key.starts_with(table_prefix)) break;
-    std::string ldb_key_str = ldb_key.ToString();
-    if (!limit_encoded.empty() && ldb_key_str >= seek_limit) break;
 
     // Parse the LevelDB key components.
     const char* kdata = ldb_key.data();
@@ -483,6 +484,15 @@ absl::Status PersistentStorage::Read(
     offset += 4 + ekey_len;
     if (offset > ksize) continue;
     std::string encoded_key(kdata + ekey_start, ekey_len);
+
+    // Compare the extracted encoded key directly against limit_encoded.
+    // We must NOT compare the full LevelDB key against
+    // MakeRowPrefix(table_id, limit_encoded) because EncodeKeyForPrefixLimit
+    // appends 0xFF bytes, changing the byte length. The 4-byte big-endian
+    // length prefix in MakeRowPrefix would then differ (e.g. 0x09 vs 0x11),
+    // causing ALL subsequent rows to sort before the limit — effectively
+    // scanning the entire table instead of just the target range.
+    if (!limit_encoded.empty() && encoded_key >= limit_encoded) break;
 
     // Read column_id.
     uint32_t col_len;
