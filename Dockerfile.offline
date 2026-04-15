@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+# Offline build using cached base image (GCC 13, certs, Go config)
+#
+# Prerequisites:
+#   docker build -f Dockerfile.base -t spanner-emulator-base .  (one-time)
+#
+# Usage: ./build-offline.sh
+# Requires BuildKit: DOCKER_BUILDKIT=1
+
+FROM spanner-emulator-base AS builder
+
+WORKDIR /workspace
+
+# Copy pre-downloaded dependencies FIRST (cached layer — changes rarely)
+COPY bazel-distdir/ /workspace/bazel-distdir/
+
+# Copy source code (changes frequently — this layer rebuilds on code changes)
+COPY . .
+
+# Configure Bazel: truststore + distdir + extended timeouts + local JDK
+RUN echo 'startup --host_jvm_args=-Djavax.net.ssl.trustStore=/tmp/truststore.jks' >> .bazelrc && \
+    echo 'startup --host_jvm_args=-Djavax.net.ssl.trustStorePassword=changeit' >> .bazelrc && \
+    echo 'startup --host_jvm_args=-Dsun.net.client.defaultConnectTimeout=300000' >> .bazelrc && \
+    echo 'startup --host_jvm_args=-Dsun.net.client.defaultReadTimeout=300000' >> .bazelrc && \
+    echo 'build --distdir=/workspace/bazel-distdir' >> .bazelrc && \
+    echo 'build --disk_cache=/tmp/bazel-disk-cache' >> .bazelrc && \
+    echo 'build --java_runtime_version=local_jdk' >> .bazelrc && \
+    echo 'build --tool_java_runtime_version=local_jdk' >> .bazelrc && \
+    echo 'common --experimental_scale_timeouts=10.0' >> .bazelrc
+
+# Build emulator + run tests.
+# BuildKit cache mounts persist Bazel's build cache and disk cache across
+# Docker builds. First build is full (~25-30 min), subsequent builds with
+# only emulator code changes take ~5-10 min.
+RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
+    --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
+    bazel build //binaries:emulator_main \
+    --verbose_failures \
+    --jobs=8 --local_ram_resources=HOST_RAM*.5 \
+    --per_file_copt='external/com_google_zetasql/.*@-std=c++20' \
+    --per_file_copt='external/com_google_absl/.*@-std=c++20' \
+    --action_env=CC=gcc-13 --action_env=CXX=g++-13 \
+    --action_env=GOPROXY=direct \
+    --action_env=GONOSUMCHECK=* \
+    --action_env=GONOSUMDB=* \
+    --action_env=GOFLAGS=-insecure \
+    && bazel test //backend/storage:persistent_storage_test \
+    --test_output=all \
+    --verbose_failures \
+    --jobs=8 --local_ram_resources=HOST_RAM*.5 \
+    --per_file_copt='external/com_google_zetasql/.*@-std=c++20' \
+    --per_file_copt='external/com_google_absl/.*@-std=c++20' \
+    --action_env=CC=gcc-13 --action_env=CXX=g++-13 \
+    && mkdir -p /build/output \
+    && cp bazel-bin/binaries/emulator_main /build/output/ \
+    && chmod +x /build/output/*
+
+# Final stage: minimal image with just the binaries
+FROM gcr.io/distroless/cc-debian12
+COPY --from=builder /build/output/ /build/output/
+CMD ["echo", "Binaries at /build/output/"]
