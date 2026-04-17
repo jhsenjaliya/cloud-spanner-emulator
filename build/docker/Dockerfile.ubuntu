@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 #
 # Copyright 2020 Google LLC
 #
@@ -17,8 +18,19 @@
 ################################################################################
 #                                     BUILD                                    #
 ################################################################################
+#
+# Supports two modes:
+#   Online (default):  docker build -f build/docker/Dockerfile.ubuntu .
+#   Offline (distdir): docker build -f build/docker/Dockerfile.ubuntu \
+#                        --build-arg OFFLINE_DIR=bazel-distdir .
+#
+# The offline mode uses a pre-downloaded dependency directory (e.g.
+# bazel-distdir/) so Bazel skips network fetches. Useful behind corporate
+# proxies that block downloads inside Docker.
 
-FROM ubuntu:18.04 as build
+FROM ubuntu:18.04 AS build
+
+ARG TARGETARCH
 
 # Install prerequisites for bazel
 RUN apt-get update && apt-get -qq install curl tar build-essential wget        \
@@ -28,7 +40,6 @@ RUN apt-get update && apt-get -qq install curl tar build-essential wget        \
 RUN apt-get update && apt-get -qq install -y default-jre default-jdk
 
 # Install bazel
-ARG TARGETARCH
 RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.17.0/bazelisk-linux-${TARGETARCH}
 RUN cp bazelisk-linux-${TARGETARCH} /usr/local/bin/bazel
 RUN chmod u+x /usr/local/bin/bazel
@@ -62,10 +73,25 @@ COPY . src/
 # Excluding all targets from //third_party/spanner_pg/src/... from building as
 # not all the targets from the PostgreSQL source needs to be built and some of
 # the unused build targets will fail.
+#
+# OFFLINE_DIR: when set (e.g. "bazel-distdir"), Bazel uses pre-downloaded deps
+# from src/<OFFLINE_DIR>/ instead of fetching from the network.
+# BAZEL_JOBS / BAZEL_RAM: tune parallelism for constrained environments.
+ARG OFFLINE_DIR=
+ARG BAZEL_JOBS=auto
+ARG BAZEL_RAM=HOST_RAM*.67
 ENV BAZEL_CXXOPTS="-std=c++17"
-RUN cd src && \
+RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
+    cd src && \
+    DISTDIR_FLAG="" && \
+    if [ -n "$OFFLINE_DIR" ] && [ -d "$OFFLINE_DIR" ]; then \
+      DISTDIR_FLAG="--distdir=/src/${OFFLINE_DIR}"; \
+    fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-    bazel build -c opt --spawn_strategy=standalone -- ... -third_party/spanner_pg/src/...
+    bazel build -c opt --spawn_strategy=standalone \
+      --jobs=${BAZEL_JOBS} --local_ram_resources=${BAZEL_RAM} \
+      ${DISTDIR_FLAG} \
+      -- ... -third_party/spanner_pg/src/...
 
 # Generate licenses file.
 RUN for file in $(find -L src/bazel-src/external                               \
