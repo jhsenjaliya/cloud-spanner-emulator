@@ -149,6 +149,23 @@ TEST(TestCatalogTest, Arrays) {
   EXPECT_TRUE(string_array_type->AsArray()->element_type()->IsString());
 }
 
+// Test that the catalog has UDFs as we expect.
+  TEST(TestCatalogTest, Udfs) {
+  zetasql::EnumerableCatalog* test_catalog =
+      GetSpangresTestSpannerUserCatalog();
+  ASSERT_NE(test_catalog, nullptr);
+
+  absl::flat_hash_set<const zetasql::Function*> output{};
+  ZETASQL_EXPECT_OK(test_catalog->GetFunctions(&output));
+  // Confirm that `simple_udf` is in the catalog.
+  EXPECT_THAT(output, Contains(testing::Property(&zetasql::Function::Name,
+                                                 "foo_udf")));
+
+  const zetasql::Function* udf;
+  ZETASQL_EXPECT_OK(test_catalog->FindFunction({"foo_udf"}, &udf));
+  EXPECT_NE(udf, nullptr);
+}
+
 // Lookup a table that doesn't exist, ensuring we get null and don't crash.
 TEST(TestCatalogTest, FailedLookup) {
   zetasql::EnumerableCatalog* test_catalog =

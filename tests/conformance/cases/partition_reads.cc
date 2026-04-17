@@ -14,6 +14,10 @@
 // limitations under the License.
 //
 
+#include <string>
+#include <vector>
+
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "zetasql/base/testing/status_matchers.h"
@@ -23,6 +27,7 @@
 #include "absl/strings/substitute.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/conformance/common/database_test_base.h"
+#include "grpcpp/client_context.h"
 
 namespace google {
 namespace spanner {
@@ -33,28 +38,18 @@ namespace {
 
 using zetasql_base::testing::StatusIs;
 
-class PartitionReadsTest : public DatabaseTest {
+class PartitionReadsTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+ public:
+  void SetUp() override {
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+
  public:
   absl::Status SetUpDatabase() override {
-    ZETASQL_RETURN_IF_ERROR(SetSchema({
-        R"(
-          CREATE TABLE Users(
-            UserId   INT64 NOT NULL,
-            Name STRING(MAX),
-            Age  INT64
-          ) PRIMARY KEY (UserId)
-        )",
-        "CREATE INDEX UsersByName ON Users(Name)",
-        "CREATE INDEX UsersByNameDescending ON Users(Name DESC)",
-        R"(
-          CREATE TABLE Threads (
-            UserId     INT64 NOT NULL,
-            ThreadId   INT64 NOT NULL,
-            Starred    BOOL
-          ) PRIMARY KEY (UserId, ThreadId),
-          INTERLEAVE IN PARENT Users ON DELETE CASCADE
-        )"}));
-    return absl::OkStatus();
+    return SetSchemaFromFile("partition.test");
   }
 
  protected:
@@ -71,13 +66,22 @@ class PartitionReadsTest : public DatabaseTest {
   void PopulateDatabase() {
     // Write fixure data to use in partition reads test.
     ZETASQL_EXPECT_OK(CommitDml({SqlStatement(
-        "INSERT Users(UserId, Name, Age) Values (1, 'Levin', 27), "
+        "INSERT INTO Users(UserId, Name, Age) Values (1, 'Levin', 27), "
         "(2, 'Mark', 32), (10, 'Douglas', 31)")}));
   }
 };
 
-// Tests using raw grpc client to test session and transaction validaton.
-TEST_F(PartitionReadsTest, CannotReadWithoutSession) {
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectPartitionReadsTest, PartitionReadsTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<PartitionReadsTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+// Tests using raw grpc client to test session and transaction validation.
+
+TEST_P(PartitionReadsTest, CannotReadWithoutSession) {
   spanner_api::PartitionReadRequest partition_read_request;
 
   spanner_api::PartitionResponse partition_read_response;
@@ -87,7 +91,7 @@ TEST_F(PartitionReadsTest, CannotReadWithoutSession) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithoutTransaction) {
+TEST_P(PartitionReadsTest, CannotReadWithoutTransaction) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request;
@@ -100,7 +104,7 @@ TEST_F(PartitionReadsTest, CannotReadWithoutTransaction) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadUsingSingleUseTransaction) {
+TEST_P(PartitionReadsTest, CannotReadUsingSingleUseTransaction) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -119,7 +123,7 @@ TEST_F(PartitionReadsTest, CannotReadUsingSingleUseTransaction) {
 }
 
 // Tests using cpp client library.
-TEST_F(PartitionReadsTest, CannotReadUsingBeginReadWriteTransaction) {
+TEST_P(PartitionReadsTest, CannotReadUsingBeginReadWriteTransaction) {
   Transaction txn{Transaction::ReadWriteOptions{}};
 
   // PartitionRead using a begin read-write transaction fails.
@@ -127,7 +131,7 @@ TEST_F(PartitionReadsTest, CannotReadUsingBeginReadWriteTransaction) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadUsingExistingReadWriteTransaction) {
+TEST_P(PartitionReadsTest, CannotReadUsingExistingReadWriteTransaction) {
   Transaction txn{Transaction::ReadWriteOptions{}};
   ZETASQL_ASSERT_OK(Read(txn, "Users", {"UserId", "Name"}, KeySet::All()));
 
@@ -136,7 +140,7 @@ TEST_F(PartitionReadsTest, CannotReadUsingExistingReadWriteTransaction) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadUsingInvalidPartitionOptions) {
+TEST_P(PartitionReadsTest, CannotReadUsingInvalidPartitionOptions) {
   Transaction txn{Transaction::ReadOnlyOptions{}};
 
   // Test that negative partition_size_bytes is not allowed.
@@ -153,7 +157,7 @@ TEST_F(PartitionReadsTest, CannotReadUsingInvalidPartitionOptions) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CanReadUsingPartitionToken) {
+TEST_P(PartitionReadsTest, CanReadUsingPartitionToken) {
   PopulateDatabase();
 
   Transaction txn{Transaction::ReadOnlyOptions{}};
@@ -167,7 +171,7 @@ TEST_F(PartitionReadsTest, CanReadUsingPartitionToken) {
       IsOkAndHoldsUnorderedRows({{1, "Levin"}, {2, "Mark"}, {10, "Douglas"}}));
 }
 
-TEST_F(PartitionReadsTest, CanReadRangeUsingPartitionToken) {
+TEST_P(PartitionReadsTest, CanReadRangeUsingPartitionToken) {
   PopulateDatabase();
 
   Transaction txn{Transaction::ReadOnlyOptions{}};
@@ -180,7 +184,7 @@ TEST_F(PartitionReadsTest, CanReadRangeUsingPartitionToken) {
               IsOkAndHoldsUnorderedRows({{1, "Levin"}, {2, "Mark"}}));
 }
 
-TEST_F(PartitionReadsTest, CanReuseTransactionForPartitionReads) {
+TEST_P(PartitionReadsTest, CanReuseTransactionForPartitionReads) {
   PopulateDatabase();
 
   Transaction txn{Transaction::ReadOnlyOptions{}};
@@ -202,7 +206,7 @@ TEST_F(PartitionReadsTest, CanReuseTransactionForPartitionReads) {
   }
 }
 
-TEST_F(PartitionReadsTest, CannotSetReadLimitWithPartitionToken) {
+TEST_P(PartitionReadsTest, CannotSetReadLimitWithPartitionToken) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -263,7 +267,7 @@ TEST_F(PartitionReadsTest, CannotSetReadLimitWithPartitionToken) {
   }
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithDifferentSession) {
+TEST_P(PartitionReadsTest, CannotReadWithDifferentSession) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -308,7 +312,7 @@ TEST_F(PartitionReadsTest, CannotReadWithDifferentSession) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithDifferentTransaction) {
+TEST_P(PartitionReadsTest, CannotReadWithDifferentTransaction) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -352,7 +356,7 @@ TEST_F(PartitionReadsTest, CannotReadWithDifferentTransaction) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithDifferentTable) {
+TEST_P(PartitionReadsTest, CannotReadWithDifferentTable) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -395,7 +399,7 @@ TEST_F(PartitionReadsTest, CannotReadWithDifferentTable) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithDifferentIndex) {
+TEST_P(PartitionReadsTest, CannotReadWithDifferentIndex) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -440,7 +444,7 @@ TEST_F(PartitionReadsTest, CannotReadWithDifferentIndex) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithDifferentKeySet) {
+TEST_P(PartitionReadsTest, CannotReadWithDifferentKeySet) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =
@@ -484,7 +488,7 @@ TEST_F(PartitionReadsTest, CannotReadWithDifferentKeySet) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionReadsTest, CannotReadWithDifferentColumns) {
+TEST_P(PartitionReadsTest, CannotReadWithDifferentColumns) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto session, CreateSession());
 
   spanner_api::PartitionReadRequest partition_read_request =

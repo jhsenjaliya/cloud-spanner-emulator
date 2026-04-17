@@ -35,6 +35,9 @@ namespace test {
 
 namespace {
 
+using ::testing::HasSubstr;
+using ::zetasql_base::testing::StatusIs;
+
 class ViewsTest
     : public DatabaseTest,
       public testing::WithParamInterface<database_api::DatabaseDialect> {
@@ -139,6 +142,58 @@ TEST_P(ViewsTest, InformationSchemaVisibility) {
   ZETASQL_ASSERT_OK(UpdateSchema({R"(DROP VIEW v)"}));
   // User-created views are no longer visible in the information schema.
   EXPECT_THAT(Query(sql), IsOkAndHoldsUnorderedRows({}));
+}
+
+class ViewsDisabledTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+  absl::Status SetUpDatabase() override {
+    feature_flags_setter_ = std::make_unique<ScopedEmulatorFeatureFlagsSetter>(
+        EmulatorFeatureFlags::Flags{
+            .enable_views = false,
+        });
+    return absl::OkStatus();
+  }
+
+  void SetUp() override {
+    if (GetConformanceTestGlobals().in_prod_env) {
+      GTEST_SKIP() << "Test not applicable to the real Spanner backend "
+                      "(Emulator flags test)";
+    }
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+  void TearDown() override {
+    if (GetConformanceTestGlobals().in_prod_env) {
+      return;
+    }
+    DatabaseTest::TearDown();
+  }
+
+ protected:
+  std::unique_ptr<ScopedEmulatorFeatureFlagsSetter> feature_flags_setter_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectViewsDisabledTests, ViewsDisabledTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<ViewsDisabledTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(ViewsDisabledTest, CreateDropViewFailsIfDisabled) {
+  EXPECT_THAT(
+      UpdateSchema({R"(
+      CREATE VIEW v SQL SECURITY INVOKER AS SELECT true AS t, false AS f)"}),
+      StatusIs(
+          absl::StatusCode::kUnimplemented,
+          HasSubstr("`CREATE` for INVOKER RIGHTS views is not supported")));
+  EXPECT_THAT(
+      UpdateSchema({R"(
+      DROP VIEW v)"}),
+      StatusIs(absl::StatusCode::kUnimplemented,
+               HasSubstr("`DROP` for INVOKER RIGHTS views is not supported")));
 }
 
 }  // namespace

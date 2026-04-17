@@ -78,6 +78,7 @@ const absl::string_view kSchemaChangeTestFiles[] = {
     "generated_column.test",
     "key_column_alteration.test",
     "models.test",
+    "property_graph.test",
     "search.test",
     "views.test",
     "ann.test",

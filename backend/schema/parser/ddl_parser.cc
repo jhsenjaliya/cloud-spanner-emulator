@@ -67,11 +67,13 @@ const char kChangeStreamExcludeInsertOptionName[] = "exclude_insert";
 const char kChangeStreamExcludeDeleteOptionName[] = "exclude_delete";
 const char kChangeStreamExcludeUpdateOptionName[] = "exclude_update";
 const char kChangeStreamExcludeTtlDeletesOptionName[] = "exclude_ttl_deletes";
+const char kChangeStreamAllowTxnExclusionOptionName[] = "allow_txn_exclusion";
 const zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
     kChangeStreamBooleanOptions{{kChangeStreamExcludeInsertOptionName,
                                  kChangeStreamExcludeDeleteOptionName,
                                  kChangeStreamExcludeUpdateOptionName,
-                                 kChangeStreamExcludeTtlDeletesOptionName}};
+                                 kChangeStreamExcludeTtlDeletesOptionName,
+                                 kChangeStreamAllowTxnExclusionOptionName}};
 const zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
     kChangeStreamStringOptions{{kChangeStreamValueCaptureTypeOptionName,
                                 kChangeStreamRetentionPeriodOptionName}};
@@ -88,6 +90,7 @@ const char kReadLeaseRegionsOptionName[] = "read_lease_regions";
 const char kVersionRetentionPeriodOptionName[] = "version_retention_period";
 const char kDefaultSequenceKindOptionName[] = "default_sequence_kind";
 const char kDefaultTimeZoneOptionName[] = "default_time_zone";
+const char kColumnarPolicyOptionName[] = "columnar_policy";
 const char kVectorIndexTreeDepth[] = "tree_depth";
 const char kVectorIndexNumberOfLeaves[] = "num_leaves";
 const char kVectorIndexNumberOfBranches[] = "num_branches";
@@ -412,6 +415,11 @@ void VisitTableOptionKeyValNode(const SimpleNode* node, OptionList* options,
 
   if (option_name == kLocalityGroupOptionName) {
     VisitLocalityGroupName(node, options, errors);
+  } else if (option_name == kColumnarPolicyOptionName) {
+    SetOption* option = options->Add();
+    option->set_option_name(option_name);
+    const SimpleNode* value_node = GetChildNode(node, 1);
+    VisitStringOrNullOptionValNode(value_node, option, errors);
   } else {
     // If this is an invalid option, return error.
     errors->push_back(
@@ -436,6 +444,11 @@ void VisitIndexOptionKeyValNode(const SimpleNode* node, OptionList* options,
 
   if (option_name == kLocalityGroupOptionName) {
     VisitLocalityGroupName(node, options, errors);
+  } else if (option_name == kColumnarPolicyOptionName) {
+    SetOption* option = options->Add();
+    const SimpleNode* value_node = GetChildNode(node, 1);
+    option->set_option_name(option_name);
+    VisitStringOrNullOptionValNode(value_node, option, errors);
   } else {
     // If this is an invalid option, return error.
     errors->push_back(
@@ -2205,6 +2218,11 @@ void VisitDatabaseOptionKeyValNode(const SimpleNode* node, OptionList* options,
     option->set_option_name(kVersionRetentionPeriodOptionName);
     VisitVersionRetentionPeriodDatabaseOptionValNode(value_node, option,
                                                      errors);
+
+  } else if (option_name == kColumnarPolicyOptionName) {
+    SetOption* option = options->Add();
+    option->set_option_name(kColumnarPolicyOptionName);
+    VisitStringOrNullOptionValNode(value_node, option, errors);
   } else {
     errors->push_back(absl::StrCat("Option: ", option_name, " is unknown."));
   }

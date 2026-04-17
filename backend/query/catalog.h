@@ -54,7 +54,6 @@ namespace backend {
 
 class NetCatalog;
 class PGFunctionCatalog;
-class PreparePropertyGraphCatalog;
 
 // Implementation of zetasql::Catalog for the root catalog in the catalog
 // hierarchy. For more details, see code of zetasql::Catalog.
@@ -79,7 +78,6 @@ class Catalog : public zetasql::EnumerableCatalog {
  private:
   friend class NetCatalog;
   friend class PGFunctionCatalog;
-  friend class PreparePropertyGraphCatalog;
 
   // These tests needs to access the tvf map and manually add an empty tvf.
   FRIEND_TEST(ChangeStreamQueryValidatorTest,

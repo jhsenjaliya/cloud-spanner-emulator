@@ -135,17 +135,17 @@ static bool FunctionNameSupportedInSpanner(
 absl::StatusOr<bool> SpangresSystemCatalog::TryInitializeEngineSystemCatalog(
     std::unique_ptr<EngineBuiltinFunctionCatalog> builtin_function_catalog,
     const zetasql::LanguageOptions& language_options) {
-  absl::WriterMutexLock l(&engine_system_catalog_mutex);
-  EngineSystemCatalog** engine_system_catalog =
-      EngineSystemCatalog::GetEngineSystemCatalogPtr();
-  if (*engine_system_catalog != nullptr) {
-    // The EngineSystemCatalog singleton was already initialized.
+  absl::WriterMutexLock l(&spangres_system_catalog_mutex);
+  SpangresSystemCatalog** spangres_system_catalog =
+      GetSpangresSystemCatalogPtr();
+  if (*spangres_system_catalog != nullptr) {
+    // The singleton was already initialized.
       EmulatorBuiltinFunctionCatalog* source_builtin_function_catalog =
           static_cast<EmulatorBuiltinFunctionCatalog*>(
               builtin_function_catalog.get());
       EmulatorBuiltinFunctionCatalog* target_builtin_function_catalog =
           static_cast<EmulatorBuiltinFunctionCatalog*>(
-              (*engine_system_catalog)->builtin_function_catalog());
+              (*spangres_system_catalog)->builtin_function_catalog());
       target_builtin_function_catalog->SetLatestSchema(
           source_builtin_function_catalog->GetLatestSchema());
     return false;
@@ -154,11 +154,11 @@ absl::StatusOr<bool> SpangresSystemCatalog::TryInitializeEngineSystemCatalog(
   // Create and setup a new catalog. If setup is successful, set the
   // EngineSystemCatalog singleton to the new catalog. Otherwise, delete the
   // old catalog and return an error.
-  EngineSystemCatalog* catalog =
+  SpangresSystemCatalog* catalog =
       new SpangresSystemCatalog(std::move(builtin_function_catalog));
   absl::Status setup_status = catalog->SetUp(language_options);
   if (setup_status.ok()) {
-    *engine_system_catalog = catalog;
+    *spangres_system_catalog = catalog;
     return true;
   } else {
     delete catalog;
@@ -167,12 +167,12 @@ absl::StatusOr<bool> SpangresSystemCatalog::TryInitializeEngineSystemCatalog(
 }
 
 void SpangresSystemCatalog::ResetEngineSystemCatalog() {
-  absl::WriterMutexLock l(&engine_system_catalog_mutex);
-  EngineSystemCatalog** engine_system_catalog =
-      EngineSystemCatalog::GetEngineSystemCatalogPtr();
-  if (*engine_system_catalog != nullptr) {
-    delete *engine_system_catalog;
-    *engine_system_catalog = nullptr;
+  absl::WriterMutexLock l(&spangres_system_catalog_mutex);
+  SpangresSystemCatalog** spangres_system_catalog =
+      SpangresSystemCatalog::GetSpangresSystemCatalogPtr();
+  if (*spangres_system_catalog != nullptr) {
+    delete *spangres_system_catalog;
+    *spangres_system_catalog = nullptr;
   }
 }
 

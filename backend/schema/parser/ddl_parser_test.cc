@@ -4529,11 +4529,12 @@ TEST(CreateChangeStream,
 TEST(CreateChangeStream, CanParseCreateChangeStreamSetBooleanOptions) {
   EXPECT_THAT(
       ParseDDLStatement(R"sql(CREATE CHANGE STREAM ChangeStream FOR
-      ALL OPTIONS ( exclude_insert = true, exclude_update=false, exclude_delete=true, exclude_ttl_deletes=null ))sql"),
+      ALL OPTIONS (allow_txn_exclusion = true, exclude_insert = true, exclude_update=false, exclude_delete=true, exclude_ttl_deletes=null ))sql"),
       IsOkAndHolds(test::EqualsProto(R"pb(
         create_change_stream {
           change_stream_name: "ChangeStream"
           for_clause { all: true }
+          set_options { option_name: "allow_txn_exclusion" bool_value: true }
           set_options { option_name: "exclude_insert" bool_value: true }
           set_options { option_name: "exclude_update" bool_value: false }
           set_options { option_name: "exclude_delete" bool_value: true }
@@ -4636,6 +4637,12 @@ TEST(CreateChangeStream, ChangeStreamErrorInvalidOptionType) {
   EXPECT_THAT(
       ParseDDLStatement(
           R"sql(CREATE CHANGE STREAM ChangeStreamErrorForClauseNothingFollowing OPTIONS (exclude_ttl_deletes = "null"))sql"),
+      StatusIs(StatusCode::kInvalidArgument,
+               HasSubstr("Error parsing Spanner DDL statement")));
+
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(CREATE CHANGE STREAM ChangeStreamErrorForClauseNothingFollowing OPTIONS (allow_txn_exclusion = ['true']))sql"),
       StatusIs(StatusCode::kInvalidArgument,
                HasSubstr("Error parsing Spanner DDL statement")));
 }
@@ -8278,6 +8285,106 @@ TEST(VersionRetentionPeriod, HandlesOption) {
                       }
                     }
                   )pb")));
+}
+
+TEST(ColumnarPolicy, HandlesOption) {
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    CREATE TABLE T(k INT64) PRIMARY KEY(k), OPTIONS(columnar_policy='enabled')
+  )sql"),
+              IsOkAndHolds(test::EqualsProto(
+                  R"pb(
+                    create_table {
+                      table_name: "T"
+                      column { column_name: "k" type: INT64 }
+                      primary_key { key_name: "k" }
+                      set_options {
+                        option_name: "columnar_policy"
+                        string_value: "enabled"
+                      }
+                    }
+                  )pb")));
+
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    ALTER TABLE T ALTER COLUMN k SET OPTIONS(columnar_policy='disabled')
+  )sql"),
+              StatusIs(StatusCode::kInvalidArgument,
+                       HasSubstr("columnar_policy is unknown")));
+
+  EXPECT_THAT(
+      ParseDDLStatement(R"sql(
+    ALTER DATABASE d SET OPTIONS(columnar_policy=NULL)
+  )sql"),
+      IsOkAndHolds(test::EqualsProto(
+          R"pb(
+            alter_database {
+              db_name: "d"
+              set_options {
+                options { option_name: "columnar_policy" null_value: true }
+              }
+            }
+          )pb")));
+
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    ALTER DATABASE d SET OPTIONS(columnar_policy='enabled')
+  )sql"),
+              IsOkAndHolds(test::EqualsProto(
+                  R"pb(
+                    alter_database {
+                      db_name: "d"
+                      set_options {
+                        options {
+                          option_name: "columnar_policy"
+                          string_value: "enabled"
+                        }
+                      }
+                    }
+                  )pb")));
+
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    CREATE INDEX i ON t(k) OPTIONS(columnar_policy='enabled')
+  )sql"),
+              IsOkAndHolds(test::EqualsProto(
+                  R"pb(
+                    create_index {
+                      index_name: "i"
+                      index_base_name: "t"
+                      key { key_name: "k" }
+                      set_options {
+                        option_name: "columnar_policy"
+                        string_value: "enabled"
+                      }
+                    }
+                  )pb")));
+
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    ALTER INDEX i SET OPTIONS(columnar_policy='disabled')
+  )sql"),
+              IsOkAndHolds(test::EqualsProto(
+                  R"pb(
+                    alter_index {
+                      index_name: "i"
+                      set_options {
+                        options {
+                          option_name: "columnar_policy"
+                          string_value: "disabled"
+                        }
+                      }
+                    }
+                  )pb")));
+
+  // columnar_policy is not available for search indices
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    CREATE SEARCH INDEX i ON t(k) OPTIONS(columnar_policy='enabled')
+  )sql"),
+              StatusIs(StatusCode::kInvalidArgument,
+                       HasSubstr("columnar_policy is unknown")));
+
+  // columnar_policy is not available for vector search indices
+  EXPECT_THAT(ParseDDLStatement(R"sql(
+    CREATE VECTOR INDEX i ON t(k) OPTIONS(columnar_policy='enabled')
+  )sql"),
+              StatusIs(StatusCode::kInvalidArgument,
+                       HasSubstr("columnar_policy is unknown")));
 }
 }  // namespace
 

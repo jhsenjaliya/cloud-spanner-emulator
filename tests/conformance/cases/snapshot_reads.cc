@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "zetasql/base/testing/status_matchers.h"
@@ -31,20 +32,30 @@ namespace {
 
 using zetasql_base::testing::StatusIs;
 
-class SnapshotReadsTest : public DatabaseTest {
+class SnapshotReadsTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+ public:
+  void SetUp() override {
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+
  public:
   absl::Status SetUpDatabase() override {
-    return SetSchema({R"(
-      CREATE TABLE Users(
-        ID   INT64 NOT NULL,
-        Name STRING(MAX),
-        Age  INT64
-      ) PRIMARY KEY (ID)
-    )"});
+    return SetSchemaFromFile("snapshot_reads.test");
   }
 };
 
-TEST_F(SnapshotReadsTest, CanReadWithMinTimestampBound) {
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectSnapshotReadsTest, SnapshotReadsTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<SnapshotReadsTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(SnapshotReadsTest, CanReadWithMinTimestampBound) {
   // Insert a few rows.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -69,7 +80,7 @@ TEST_F(SnapshotReadsTest, CanReadWithMinTimestampBound) {
                                                    ValueRow{2, "Peter", 41}}));
 }
 
-TEST_F(SnapshotReadsTest, CanReadWithMaxStalenessBound) {
+TEST_P(SnapshotReadsTest, CanReadWithMaxStalenessBound) {
   // Insert a few rows.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -93,7 +104,7 @@ TEST_F(SnapshotReadsTest, CanReadWithMaxStalenessBound) {
                                                    ValueRow{2, "Peter", 41}}));
 }
 
-TEST_F(SnapshotReadsTest, CanReadWithExactTimestamp) {
+TEST_P(SnapshotReadsTest, CanReadWithExactTimestamp) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
 
@@ -109,7 +120,7 @@ TEST_F(SnapshotReadsTest, CanReadWithExactTimestamp) {
               IsOkAndHoldsRows({ValueRow{1, "John", 23}}));
 }
 
-TEST_F(SnapshotReadsTest, CanReadWithExactStaleness) {
+TEST_P(SnapshotReadsTest, CanReadWithExactStaleness) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
 
@@ -125,7 +136,7 @@ TEST_F(SnapshotReadsTest, CanReadWithExactStaleness) {
               IsOkAndHoldsRows({ValueRow{1, "John", 23}}));
 }
 
-TEST_F(SnapshotReadsTest, CanReadWithExactTimestampInFuture) {
+TEST_P(SnapshotReadsTest, CanReadWithExactTimestampInFuture) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -144,7 +155,7 @@ TEST_F(SnapshotReadsTest, CanReadWithExactTimestampInFuture) {
   EXPECT_GE(absl::Now() - absl::Milliseconds(future_time_ms * 0.9), start_time);
 }
 
-TEST_F(SnapshotReadsTest, CanReadWithMinTimestampBoundInFuture) {
+TEST_P(SnapshotReadsTest, CanReadWithMinTimestampBoundInFuture) {
   // Insert a few rows.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", "23"}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -163,7 +174,7 @@ TEST_F(SnapshotReadsTest, CanReadWithMinTimestampBoundInFuture) {
   EXPECT_GE(absl::Now() - absl::Milliseconds(future_time_ms * 0.9), start_time);
 }
 
-TEST_F(SnapshotReadsTest, CannnotReadWithExactTimestampTooFarInFuture) {
+TEST_P(SnapshotReadsTest, CannnotReadWithExactTimestampTooFarInFuture) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -176,7 +187,7 @@ TEST_F(SnapshotReadsTest, CannnotReadWithExactTimestampTooFarInFuture) {
   }
 }
 
-TEST_F(SnapshotReadsTest, CannnotQueryWithExactTimestampTooFarInFuture) {
+TEST_P(SnapshotReadsTest, CannnotQueryWithExactTimestampTooFarInFuture) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -190,7 +201,7 @@ TEST_F(SnapshotReadsTest, CannnotQueryWithExactTimestampTooFarInFuture) {
   }
 }
 
-TEST_F(SnapshotReadsTest, CannnotReadWithMinTimestampBoundTooFarInFuture) {
+TEST_P(SnapshotReadsTest, CannnotReadWithMinTimestampBoundTooFarInFuture) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));
@@ -203,7 +214,7 @@ TEST_F(SnapshotReadsTest, CannnotReadWithMinTimestampBoundTooFarInFuture) {
   }
 }
 
-TEST_F(SnapshotReadsTest, CannnotQueryWithMinTimestampBoundTooFarInFuture) {
+TEST_P(SnapshotReadsTest, CannnotQueryWithMinTimestampBoundTooFarInFuture) {
   // Insert a row.
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {1, "John", 23}));
   ZETASQL_ASSERT_OK(Insert("Users", {"ID", "Name", "Age"}, {2, "Peter", 41}));

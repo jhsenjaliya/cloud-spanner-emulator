@@ -91,6 +91,7 @@ enum class ChangeStreamOption {
   kExcludeTtlDeletes,
   kAllowTxnExclusion,
   kPartitionMode,
+  kPerPlacementTvf,
 };
 
 absl::optional<ChangeStreamOption> GetChangeStreamOption(
@@ -126,6 +127,10 @@ absl::optional<ChangeStreamOption> GetChangeStreamOption(
   if (option_name ==
       internal::PostgreSQLConstants::kChangeStreamPartitionModeOptionName) {
     return ChangeStreamOption::kPartitionMode;
+  }
+  if (option_name ==
+      internal::PostgreSQLConstants::kChangeStreamPerPlacementTvfOptionName) {
+    return ChangeStreamOption::kPerPlacementTvf;
   }
   return absl::nullopt;
 }
@@ -390,6 +395,9 @@ class PostgreSQLToSpannerDDLTranslatorImpl
                                    google::spanner::emulator::backend::ddl::CreateFunction& out) const;
   absl::Status TranslateDropView(const DropStmt& drop_statement,
                                  google::spanner::emulator::backend::ddl::DropFunction& out) const;
+  absl::Status TranslateDropFunction(const DropStmt& drop_statement,
+                                     const TranslationOptions& options,
+                                     google::spanner::emulator::backend::ddl::DropFunction& out) const;
   absl::Status TranslateDropChangeStream(
       const DropStmt& drop_change_stream_statement,
       const TranslationOptions& options,
@@ -2603,6 +2611,10 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateDropStatement(
     case OBJECT_VIEW:
       return TranslateDropView(drop_statement, *out.mutable_drop_function());
 
+    case OBJECT_FUNCTION:
+      return TranslateDropFunction(drop_statement, options,
+                                   *out.mutable_drop_function());
+
     case OBJECT_CHANGE_STREAM:
       return TranslateDropChangeStream(
           drop_statement, options, *out.mutable_drop_change_stream());
@@ -2753,6 +2765,26 @@ absl::Status TranslateDropFunctionOrView(const DropStmt& drop_statement,
   }
 
   return absl::OkStatus();
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateDropFunction(
+    const DropStmt& drop_statement, const TranslationOptions& options,
+    google::spanner::emulator::backend::ddl::DropFunction& out) const {
+  if (!options.enable_create_function) {
+    return UnsupportedTranslationError(
+        "<DROP FUNCTION> statement is not supported.");
+  }
+  ZETASQL_RET_CHECK_EQ(drop_statement.removeType, OBJECT_FUNCTION);
+
+  out.set_function_kind(google::spanner::emulator::backend::ddl::Function::FUNCTION);
+
+  ZETASQL_ASSIGN_OR_RETURN(
+      const ObjectWithArgs* object_with_args,
+      (SingleItemListAsNode<ObjectWithArgs, T_ObjectWithArgs>)(drop_statement
+                                                                   .objects));
+  const List* function_to_drop_list = object_with_args->objname;
+  return ::postgres_translator::spangres::TranslateDropFunctionOrView(
+      drop_statement, function_to_drop_list, out);
 }
 
 absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateDropView(
@@ -3097,7 +3129,8 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateAlterChangeStream(
         case ChangeStreamOption::kExcludeUpdate:
         case ChangeStreamOption::kExcludeDelete:
         case ChangeStreamOption::kExcludeTtlDeletes:
-        case ChangeStreamOption::kAllowTxnExclusion: {
+        case ChangeStreamOption::kAllowTxnExclusion:
+        case ChangeStreamOption::kPerPlacementTvf: {
           google::spanner::emulator::backend::ddl::SetOption* option_out =
               out.mutable_set_options()->mutable_options()->Add();
           option_out->set_option_name(option_string);
@@ -3214,7 +3247,8 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::PopulateChangeStreamOptions(
       case ChangeStreamOption::kExcludeUpdate:
       case ChangeStreamOption::kExcludeDelete:
       case ChangeStreamOption::kExcludeTtlDeletes:
-      case ChangeStreamOption::kAllowTxnExclusion: {
+      case ChangeStreamOption::kAllowTxnExclusion:
+      case ChangeStreamOption::kPerPlacementTvf: {
         if (option_kind == ChangeStreamOption::kExcludeTtlDeletes &&
             !options.enable_change_streams_ttl_deletes_filter_option) {
           return UnsupportedTranslationError(
@@ -3224,6 +3258,11 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::PopulateChangeStreamOptions(
             !options.enable_change_streams_allow_txn_exclusion_option) {
           return UnsupportedTranslationError(
               "Option allow_txn_exclusion is not supported yet.");
+        }
+        if (option_kind == ChangeStreamOption::kPerPlacementTvf &&
+            !options.enable_change_streams_per_placement_tvf_option) {
+          return UnsupportedTranslationError(
+              "Option per_placement_tvf is not supported yet.");
         }
         if ((option_kind == ChangeStreamOption::kExcludeInsert ||
              option_kind == ChangeStreamOption::kExcludeUpdate ||

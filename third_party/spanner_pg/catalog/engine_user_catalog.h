@@ -108,6 +108,10 @@ class EngineUserCatalog : public zetasql::EnumerableCatalog {
   virtual const std::vector<std::string> GetCatalogPathForTable(
       const zetasql::Table* table) const = 0;
 
+  // Engine-specific filter for user-defined scalar UDFs. Used to prevent
+  // returning duplicate entries in both the system and user catalogs.
+  virtual bool IsUserDefinedFunction(const zetasql::Function* udf) const = 0;
+
   virtual absl::StatusOr<std::vector<absl::string_view>> GetPrimaryKeyColumns(
       const zetasql::Table& table) const = 0;
 

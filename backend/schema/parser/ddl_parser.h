@@ -47,6 +47,7 @@ extern const char kChangeStreamExcludeInsertOptionName[];
 extern const char kChangeStreamExcludeUpdateOptionName[];
 extern const char kChangeStreamExcludeDeleteOptionName[];
 extern const char kChangeStreamExcludeTtlDeletesOptionName[];
+extern const char kChangeStreamAllowTxnExclusionOptionName[];
 extern const zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
     kChangeStreamBooleanOptions;
 
@@ -61,6 +62,7 @@ extern const char kReadLeaseRegionsOptionName[];
 extern const char kVersionRetentionPeriodOptionName[];
 extern const char kDefaultSequenceKindOptionName[];
 extern const char kDefaultTimeZoneOptionName[];
+extern const char kColumnarPolicyOptionName[];
 
 extern const char kLocalityGroupOptionName[];
 extern const char kLocalityGroupStorageOptionName[];

@@ -90,6 +90,9 @@ absl::Status EngineUserCatalog::FindFunction(
   const zetasql::Function* udf_candidate;
   ZETASQL_RETURN_IF_ERROR(engine_provided_catalog_->FindFunction(
       adjusted_path, &udf_candidate, options));
+  if (!IsUserDefinedFunction(udf_candidate)) {
+    return FunctionNotFoundError(path);
+  }
   *function = udf_candidate;
   return absl::OkStatus();
 }

@@ -806,6 +806,36 @@ TEST_P(SchemaUpdaterTest, SetOptions_ExclusionOptions) {
   }
 }
 
+TEST_P(SchemaUpdaterTest, SetOptions_AllowTxnExclusion) {
+  ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema(
+                                        {
+                                            R"(
+      CREATE TABLE T (
+        k1 INT64,
+        c1 STRING(100),
+      ) PRIMARY KEY (k1)
+    )",
+                                            R"(
+      CREATE CHANGE STREAM C FOR ALL OPTIONS ( allow_txn_exclusion = true ))"},
+                                        "", GetParam(), true));
+  EXPECT_EQ(schema->FindChangeStream("C")->allow_txn_exclusion(), true);
+
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      auto new_schema,
+      UpdateSchema(
+          schema.get(),
+          {R"(CREATE CHANGE STREAM C2 OPTIONS( allow_txn_exclusion = NULL))"}));
+  EXPECT_EQ(new_schema->FindChangeStream("C2")->allow_txn_exclusion(),
+            std::nullopt);
+
+  ZETASQL_ASSERT_OK_AND_ASSIGN(
+      new_schema,
+      UpdateSchema(
+          schema.get(),
+          {R"(CREATE CHANGE STREAM C2 OPTIONS( allow_txn_exclusion = false))"}));
+  EXPECT_EQ(new_schema->FindChangeStream("C2")->allow_txn_exclusion(), false);
+}
+
 TEST_P(SchemaUpdaterTest, DropChangeStream) {
   ZETASQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({R"(
               CREATE TABLE test_table (

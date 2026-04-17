@@ -136,7 +136,8 @@ class Udf : public SchemaNode {
         endpoint_(std::nullopt),
         max_batching_rows_(std::nullopt) {}
   Udf(const Udf& other)
-      : validate_(other.validate_),
+      : SchemaNode(other),
+        validate_(other.validate_),
         validate_update_(other.validate_update_),
         name_(other.name_),
         dependencies_(other.dependencies_),

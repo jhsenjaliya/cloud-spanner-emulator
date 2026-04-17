@@ -63,6 +63,7 @@ class PGCatalogTest : public DatabaseTest {
  public:
   PGCatalogTest()
       : feature_flags_({.enable_postgresql_interface = true,
+                        .enable_user_defined_functions = true,
                         .enable_interleave_in = true}) {}
 
   void SetUp() override {
@@ -897,6 +898,53 @@ TEST_F(PGCatalogTest, PGProc) {
       ORDER BY
         p.oid)sql"),
               IsOkAndHoldsRows(expected));
+}
+
+TEST_F(PGCatalogTest, PGProc_UDFs) {
+  GTEST_SKIP() << "Temporarily disable this test.";
+  if (in_prod_env()) {
+    GTEST_SKIP() << "Test not applicable to the real Spanner backend (the "
+                    "production pg_proc doesn't fully populate UDFs yet)";
+  }
+
+  ZETASQL_ASSERT_OK(UpdateSchema({
+      R"(CREATE FUNCTION my_add(a integer, b integer)
+         RETURNS integer
+         LANGUAGE sql
+         IMMUTABLE
+         RETURN b + a)",
+      R"(CREATE FUNCTION my_concat(a text, b text)
+         RETURNS text
+         LANGUAGE sql
+         VOLATILE
+         RETURN (a || b))"}));
+
+  auto results = Query(R"sql(
+      SELECT
+        p.proname,
+        n.nspname,
+        p.prorettype,
+        p.proargtypes,
+        p.prokind,
+        p.provolatile,
+        p.prosqlbody
+      FROM
+        pg_catalog.pg_proc as p
+      JOIN pg_catalog.pg_namespace as n on n.oid = p.pronamespace
+      WHERE
+        p.proname LIKE 'my_%'
+      ORDER BY
+        p.proname
+  )sql");
+
+  std::vector<ValueRow> expected = {
+      {"my_add", "public", PgOid(20), std::vector<PgOid>{PgOid(20), PgOid(20)},
+       "f", "i", "(b + a)"},
+      {"my_concat", "public", PgOid(25),
+       std::vector<PgOid>{PgOid(25), PgOid(25)}, "f", "v",
+       "((a)::text || (b)::text)"},
+  };
+  EXPECT_THAT(results, IsOkAndHoldsRows(expected));
 }
 
 TEST_F(PGCatalogTest, PGSequence) {

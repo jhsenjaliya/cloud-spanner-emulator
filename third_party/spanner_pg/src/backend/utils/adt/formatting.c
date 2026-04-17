@@ -4798,7 +4798,7 @@ do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
 			// Updated calculation of the formula below, to protect against overflow.
 			// `tmfc.ddd = (tmfc.ww - 1) * 7 + 1;`
 			int tmp;
-			if (pg_mul_s32_overflow((tmfc.ww - 1), 7, &tmp) ||
+			if (tmfc.ww == INT_MIN || pg_mul_s32_overflow((tmfc.ww - 1), 7, &tmp) ||
 					pg_add_s32_overflow(tmp, 1, &tmfc.ddd)) {
 				tmfc.ddd = -1;
 			}

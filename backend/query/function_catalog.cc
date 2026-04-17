@@ -684,6 +684,7 @@ FunctionCatalog::GetNextSequenceValueFunction(const std::string& catalog_name) {
   function_options.set_evaluator(zetasql::FunctionEvaluator(evaluator));
   function_options.set_arguments_are_coercible(false);
   function_options.set_supports_safe_error_mode(false);
+  function_options.set_volatility(zetasql::FunctionEnums::VOLATILE);
 
   return std::make_unique<zetasql::Function>(
       kGetNextSequenceValueFunctionName, catalog_name,

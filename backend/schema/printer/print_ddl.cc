@@ -510,8 +510,11 @@ std::string PrintModel(const Model* model) {
 std::string PrintLabel(const PropertyGraph::Label& label) {
   std::string result = label.name;
   if (!label.property_names.empty()) {
-    absl::StrAppend(&result, " PROPERTIES (",
-                    absl::StrJoin(label.property_names, ", "), ")");
+    std::vector<std::string> property_names = {label.property_names.begin(),
+                                               label.property_names.end()};
+    std::sort(property_names.begin(), property_names.end());
+    absl::StrAppend(&result, " PROPERTIES(\n",
+                    absl::StrJoin(property_names, ",\n"), ")");
   }
   return result;
 }
@@ -520,18 +523,15 @@ std::string PrintGraphElementTable(
     const PropertyGraph* property_graph,
     const PropertyGraph::GraphElementTable& graph_element_table) {
   std::string statement = absl::Substitute("$0", graph_element_table.name());
+  if (!graph_element_table.alias().empty() &&
+      graph_element_table.alias() != graph_element_table.name()) {
+    absl::StrAppend(&statement, " AS ", graph_element_table.alias());
+  }
+
   if (!graph_element_table.key_clause_columns().empty()) {
     absl::StrAppend(
         &statement, " KEY(",
         absl::StrJoin(graph_element_table.key_clause_columns(), ", "), ")");
-  }
-  // Print labels and their properties
-  for (absl::string_view label_name : graph_element_table.label_names()) {
-    const PropertyGraph::Label* label;
-    absl::Status find_status =
-        property_graph->FindLabelByName(label_name, label);
-    ABSL_CHECK_OK(find_status);
-    absl::StrAppend(&statement, " LABEL ", PrintLabel(*label), "\n");
   }
   if (graph_element_table.element_kind() ==
       PropertyGraph::GraphElementKind::EDGE) {
@@ -558,6 +558,17 @@ std::string PrintGraphElementTable(
             ", "),
         ")");
   }
+  // Print labels and their properties
+  std::vector<std::string> labels;
+  labels.reserve(graph_element_table.label_names().size());
+  for (absl::string_view label_name : graph_element_table.label_names()) {
+    const PropertyGraph::Label* label;
+    absl::Status find_status =
+        property_graph->FindLabelByName(label_name, label);
+    ABSL_CHECK_OK(find_status);
+    labels.push_back(absl::StrCat(" LABEL ", PrintLabel(*label)));
+  }
+  absl::StrAppend(&statement, absl::StrJoin(labels, ","));
   return statement;
 }
 
@@ -565,22 +576,25 @@ std::string PrintPropertyGraph(const PropertyGraph* property_graph) {
   std::string statement =
       absl::Substitute("CREATE PROPERTY GRAPH $0\n", property_graph->Name());
 
-  absl::StrAppend(&statement, "NODE TABLES(\n");
+  std::vector<std::string> node_tables;
+  node_tables.reserve(property_graph->NodeTables().size());
   for (const PropertyGraph::GraphElementTable& node_table :
        property_graph->NodeTables()) {
-    absl::StrAppend(&statement, "  ",
-                    PrintGraphElementTable(property_graph, node_table), ",\n");
+    node_tables.push_back(PrintGraphElementTable(property_graph, node_table));
   }
-  absl::StrAppend(&statement, ")\n");
+  absl::StrAppend(&statement, "NODE TABLES(\n");
+  absl::StrAppend(&statement, "  ", absl::StrJoin(node_tables, ",\n"), "\n)");
 
-  absl::StrAppend(&statement, "EDGE TABLES(\n");
+  std::vector<std::string> edge_tables;
+  edge_tables.reserve(property_graph->EdgeTables().size());
   for (const PropertyGraph::GraphElementTable& edge_table :
        property_graph->EdgeTables()) {
-    absl::StrAppend(&statement, "  ",
-                    PrintGraphElementTable(property_graph, edge_table), ",\n");
+    edge_tables.push_back(PrintGraphElementTable(property_graph, edge_table));
   }
-  absl::StrAppend(&statement, ")\n");
-
+  if (!edge_tables.empty()) {
+    absl::StrAppend(&statement, "\nEDGE TABLES(\n");
+    absl::StrAppend(&statement, "  ", absl::StrJoin(edge_tables, ",\n"), "\n)");
+  }
   return statement;
 }
 

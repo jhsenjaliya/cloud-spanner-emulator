@@ -14,16 +14,21 @@
 // limitations under the License.
 //
 
+#include <string>
+
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "zetasql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "common/feature_flags.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 #include "tests/conformance/common/database_test_base.h"
+#include "grpcpp/client_context.h"
 
 namespace google {
 namespace spanner {
@@ -34,26 +39,15 @@ namespace {
 
 using zetasql_base::testing::StatusIs;
 
-class PartitionedDmlTest : public DatabaseTest {
+class PartitionedDmlTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
  public:
   PartitionedDmlTest()
       : feature_flags_({.enable_bit_reversed_positive_sequences = true}) {}
 
   absl::Status SetUpDatabase() override {
-    ZETASQL_RETURN_IF_ERROR(SetSchema({
-        R"(
-          CREATE TABLE Users(
-            ID       INT64 NOT NULL,
-            Name     STRING(MAX),
-            Age      INT64,
-            Updated  TIMESTAMP OPTIONS (allow_commit_timestamp = true),
-          ) PRIMARY KEY (ID)
-        )",
-        R"(
-          CREATE SEQUENCE mysequence OPTIONS (
-            sequence_kind = "bit_reversed_positive"
-          )
-        )"}));
+    ZETASQL_RETURN_IF_ERROR(SetSchemaFromFile("partitioned_dml.test"));
 
     // Create a raw session for tests which cannot use the C++ client library
     // directly.
@@ -61,13 +55,16 @@ class PartitionedDmlTest : public DatabaseTest {
     return absl::OkStatus();
   }
 
-  void SetUp() override { DatabaseTest::SetUp(); }
+  void SetUp() override {
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
 
  protected:
   void PopulateDatabase() {
-    ZETASQL_EXPECT_OK(CommitDml(
-        {SqlStatement("INSERT Users(ID, Name, Age) Values (1, 'Levin', 27), "
-                      "(2, 'Mark', 32), (10, 'Douglas', 31)")}));
+    ZETASQL_EXPECT_OK(CommitDml({SqlStatement(
+        "INSERT INTO Users(ID, Name, Age) Values (1, 'Levin', 27), "
+        "(2, 'Mark', 32), (10, 'Douglas', 31)")}));
   }
 
   absl::Status CreateSession(absl::string_view database_uri) {
@@ -112,7 +109,15 @@ class PartitionedDmlTest : public DatabaseTest {
   test::ScopedEmulatorFeatureFlagsSetter feature_flags_;
 };
 
-TEST_F(PartitionedDmlTest, UpdateRowsSucceed) {
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectPartitionedDmlTest, PartitionedDmlTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<PartitionedDmlTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(PartitionedDmlTest, UpdateRowsSucceed) {
   PopulateDatabase();
 
   ZETASQL_ASSERT_OK_AND_ASSIGN(PartitionedDmlResult result,
@@ -123,7 +128,11 @@ TEST_F(PartitionedDmlTest, UpdateRowsSucceed) {
               IsOkAndHoldsRows({{1, "Levin", 27}}));
 }
 
-TEST_F(PartitionedDmlTest, UpdateRowsUsingSequenceSucceed) {
+TEST_P(PartitionedDmlTest, UpdateRowsUsingSequenceSucceed) {
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP() << "nextval('<sequence>') is not supported in the emulator "
+                    "for PostgreSQL";
+  }
   PopulateDatabase();
 
   ZETASQL_ASSERT_OK_AND_ASSIGN(
@@ -145,7 +154,7 @@ TEST_F(PartitionedDmlTest, UpdateRowsUsingSequenceSucceed) {
       IsOkAndHoldsRows({{1}}));
 }
 
-TEST_F(PartitionedDmlTest, DeleteAllRowsSucceed) {
+TEST_P(PartitionedDmlTest, DeleteAllRowsSucceed) {
   PopulateDatabase();
 
   ZETASQL_ASSERT_OK_AND_ASSIGN(
@@ -156,27 +165,27 @@ TEST_F(PartitionedDmlTest, DeleteAllRowsSucceed) {
               IsOkAndHoldsRows({}));
 }
 
-TEST_F(PartitionedDmlTest,
+TEST_P(PartitionedDmlTest,
        CannotExecuteSelectStatementUsingPartitionedDmlTransaction) {
   EXPECT_THAT(ExecutePartitionedDml(SqlStatement("SELECT * FROM Users")),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionedDmlTest, CannotInsertUsingPartitionedDml) {
+TEST_P(PartitionedDmlTest, CannotInsertUsingPartitionedDml) {
   EXPECT_THAT(ExecutePartitionedDml(SqlStatement(
-                  "INSERT Users(ID, Name, Age) Values (10, 'Levin', 27), "
+                  "INSERT INTO Users(ID, Name, Age) Values (10, 'Levin', 27), "
                   "(20, 'Mark', 32), (30, 'Douglas', 31)")),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionedDmlTest, PartitionedDMLOnlySupportsSimpleQuery) {
+TEST_P(PartitionedDmlTest, PartitionedDMLOnlySupportsSimpleQuery) {
   EXPECT_THAT(ExecutePartitionedDml(SqlStatement(
                   "UPDATE Users SET Name = 'foo' "
                   "WHERE ID = (SELECT ID FROM Users WHERE Name = 'Levin')")),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionedDmlTest, CannotReadUsingPartitionedDmlTransaction) {
+TEST_P(PartitionedDmlTest, CannotReadUsingPartitionedDmlTransaction) {
   spanner_api::ReadRequest read_request = PARSE_TEXT_PROTO(R"(
     transaction { begin { partitioned_dml {} } }
     table: "Users"
@@ -192,7 +201,7 @@ TEST_F(PartitionedDmlTest, CannotReadUsingPartitionedDmlTransaction) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionedDmlTest,
+TEST_P(PartitionedDmlTest,
        CannotExecuteBatchDmlUsingPartitionedDmlTransaction) {
   spanner_api::ExecuteBatchDmlRequest batch_dml_request = PARSE_TEXT_PROTO(R"(
     transaction { begin { partitioned_dml {} } }
@@ -208,7 +217,11 @@ TEST_F(PartitionedDmlTest,
       StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(PartitionedDmlTest, UpdateRowsWithCommitTimestampSucceed) {
+TEST_P(PartitionedDmlTest, UpdateRowsWithCommitTimestampSucceed) {
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP() << "SPANNER.PENDING_COMMIT_TIMESTAMP is not supported in the "
+                    "emulator for PostgreSQL";
+  }
   PopulateDatabase();
 
   ZETASQL_ASSERT_OK_AND_ASSIGN(PartitionedDmlResult result,

@@ -786,24 +786,6 @@ cc_test(
 )
 
 cc_library(
-    name = "prepare_property_graph_catalog",
-    hdrs = [
-        "prepare_property_graph_catalog.h",
-    ],
-    deps = [
-        ":analyzer_options",
-        ":catalog",
-        ":function_catalog",
-        "//backend/schema/catalog:schema",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings",
-        "@com_google_zetasql//zetasql/public:analyzer_options",
-        "@com_google_zetasql//zetasql/public:catalog",
-        "@com_google_zetasql//zetasql/public:type",
-    ],
-)
-
-cc_library(
     name = "function_catalog",
     srcs = [
         "function_catalog.cc",

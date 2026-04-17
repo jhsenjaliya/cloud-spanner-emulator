@@ -864,6 +864,120 @@ TEST_P(QueryTest, UnnestWithOrdinalityOrOffset) {
   }
 }
 
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  ZETASQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{2, Array<std::string>{"abc", "def", "ghi"}}}));
+
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{2, 1, "abc"}, {2, 2, "def"}, {2, 3, "ghi"}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_Filter) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  ZETASQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{2, Array<std::string>{"abc", "def", "ghi"}}}));
+
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "WHERE a1_0.ordinality > 1 "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{2, 2, "def"}, {2, 3, "ghi"}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_EmptyAndNull) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  ZETASQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{1, Array<std::string>{}},           // Empty array
+                         {2, Null<Array<std::string>>()}}));  // NULL array
+
+  // UNNEST of empty or NULL array should return 0 rows
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_Join) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  ZETASQL_EXPECT_OK(MultiInsert(
+      "EntityWithArrays", {"id", "the_array"},
+      {{2, Array<std::string>{"Douglas Adams", "Suzanne Collins"}}}));
+
+  // Join unnested array values with users table on name
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, u.user_id "
+            "FROM EntityWithArrays ewa1_0 "
+            "JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "JOIN users u ON a1_0.a1_0 = u.name "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{2, 1, 1}, {2, 2, 2}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_CommaJoin) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  ZETASQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{2, Array<std::string>{"abc", "def"}}}));
+
+  // Comma join (Cross Join)
+  EXPECT_THAT(Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+                    "FROM EntityWithArrays ewa1_0, "
+                    "UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 "
+                    "ORDER BY ewa1_0.id, a1_0.ordinality"),
+              IsOkAndHoldsRows({{2, 1, "abc"}, {2, 2, "def"}}));
+}
+
+TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_LeftJoin) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  ZETASQL_EXPECT_OK(MultiInsert("EntityWithArrays", {"id", "the_array"},
+                        {{1, Array<std::string>{}},        // Empty array
+                         {2, Null<Array<std::string>>()},  // NULL array
+                         {3, Array<std::string>{"xyz"}}}));
+
+  // LEFT JOIN should preserve rows with empty/NULL arrays, returning NULLs for
+  // unnested columns
+  EXPECT_THAT(
+      Query("SELECT ewa1_0.id, a1_0.ordinality, a1_0.a1_0 "
+            "FROM EntityWithArrays ewa1_0 "
+            "LEFT JOIN UNNEST(ewa1_0.the_array) WITH ORDINALITY a1_0 ON true "
+            "ORDER BY ewa1_0.id, a1_0.ordinality"),
+      IsOkAndHoldsRows({{1, Null<int64_t>(), Null<std::string>()},
+                        {2, Null<int64_t>(), Null<std::string>()},
+                        {3, 1, "xyz"}}));
+}
+
 TEST_P(QueryTest, UnnestWithOrdinality) {
   if (GetParam() == database_api::DatabaseDialect::GOOGLE_STANDARD_SQL) {
     GTEST_SKIP();

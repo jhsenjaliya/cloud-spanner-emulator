@@ -14,7 +14,11 @@
 // limitations under the License.
 //
 
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include "zetasql/base/testing/status_matchers.h"
+#include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "common/feature_flags.h"
 #include "tests/common/scoped_feature_flags_setter.h"
@@ -30,42 +34,18 @@ namespace {
 using testing::HasSubstr;
 using zetasql_base::testing::StatusIs;
 
-class InterleavingTest : public DatabaseTest {
+class InterleavingTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+ public:
+  void SetUp() override {
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+
  public:
   absl::Status SetUpDatabase() override {
-    return SetSchema({
-        R"(
-        CREATE TABLE Users (
-          UserId     INT64 NOT NULL,
-          Name       STRING(MAX),
-        ) PRIMARY KEY (UserId)
-      )",
-        R"(
-        CREATE TABLE Threads (
-          UserId     INT64 NOT NULL,
-          ThreadId   INT64 NOT NULL,
-          Starred    BOOL
-        ) PRIMARY KEY (UserId, ThreadId),
-        INTERLEAVE IN PARENT Users ON DELETE CASCADE
-      )",
-        R"(
-        CREATE TABLE Messages (
-          UserId     INT64 NOT NULL,
-          ThreadId   INT64 NOT NULL,
-          MessageId  INT64 NOT NULL,
-          Subject    STRING(MAX),
-        ) PRIMARY KEY (UserId, ThreadId, MessageId),
-        INTERLEAVE IN PARENT Threads ON DELETE CASCADE
-      )",
-        R"(
-        CREATE TABLE Snoozes (
-          UserId     INT64 NOT NULL,
-          ThreadId   INT64 NOT NULL,
-          SnoozeId   INT64 NOT NULL,
-          SnoozeTs   Timestamp,
-        ) PRIMARY KEY (UserId, ThreadId, SnoozeId),
-        INTERLEAVE IN PARENT Threads ON DELETE NO ACTION
-      )"});
+    return SetSchemaFromFile("interleaving.test");
   }
 
  protected:
@@ -107,12 +87,20 @@ class InterleavingTest : public DatabaseTest {
   }
 };
 
-TEST_F(InterleavingTest, CannotInsertChildWithoutParent) {
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectInterleavingTest, InterleavingTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<InterleavingTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(InterleavingTest, CannotInsertChildWithoutParent) {
   EXPECT_THAT(Insert("Threads", {"UserId", "ThreadId"}, {1, 1}),
               StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST_F(InterleavingTest, CanInsertChildWithExistingParent) {
+TEST_P(InterleavingTest, CanInsertChildWithExistingParent) {
   ZETASQL_EXPECT_OK(Insert("Users", {"UserId", "Name"}, {1, "Douglas Adams"}));
 
   ZETASQL_EXPECT_OK(Insert("Threads", {"UserId", "ThreadId"}, {1, 1}));
@@ -121,7 +109,7 @@ TEST_F(InterleavingTest, CanInsertChildWithExistingParent) {
               IsOkAndHoldsRows({{1, 1}}));
 }
 
-TEST_F(InterleavingTest, CanInsertParentAndChildInSameTransaction) {
+TEST_P(InterleavingTest, CanInsertParentAndChildInSameTransaction) {
   ZETASQL_EXPECT_OK(Commit({
       MakeInsert("Users", {"UserId", "Name"}, 1, "Douglas Adams"),
       MakeInsert("Threads", {"UserId", "ThreadId"}, 1, 1),
@@ -139,7 +127,7 @@ TEST_F(InterleavingTest, CanInsertParentAndChildInSameTransaction) {
                                      : absl::StatusCode::kNotFound));
 }
 
-TEST_F(InterleavingTest, CanPerformCascadingDeletes) {
+TEST_P(InterleavingTest, CanPerformCascadingDeletes) {
   PopulateDatabase();
 
   // Delete a leaf, parent tables are not affected.
@@ -173,7 +161,7 @@ TEST_F(InterleavingTest, CanPerformCascadingDeletes) {
                         {3, 1, 1, "Interview Notification"}}));
 }
 
-TEST_F(InterleavingTest, CascadingDeletesAreIdempotent) {
+TEST_P(InterleavingTest, CascadingDeletesAreIdempotent) {
   PopulateDatabase();
 
   // Delete all the rows from all the tables starting with key part 1.
@@ -193,7 +181,7 @@ TEST_F(InterleavingTest, CascadingDeletesAreIdempotent) {
   ZETASQL_EXPECT_OK(Delete("Messages", Key(1, 1, 1)));
 }
 
-TEST_F(InterleavingTest, CanPerformCascadingRangeDeletes) {
+TEST_P(InterleavingTest, CanPerformCascadingRangeDeletes) {
   PopulateDatabase();
 
   // Delete all threads with key part user_id 2.
@@ -216,7 +204,7 @@ TEST_F(InterleavingTest, CanPerformCascadingRangeDeletes) {
                         {3, 1, 1, "Interview Notification"}}));
 }
 
-TEST_F(InterleavingTest, CannotDeleteRowWithNoActionChildren) {
+TEST_P(InterleavingTest, CannotDeleteRowWithNoActionChildren) {
   PopulateDatabaseWithNoActionChildren();
 
   // Attempt to delete a Thread fails since an ON DELETE NO ACTION child exists
@@ -241,7 +229,7 @@ TEST_F(InterleavingTest, CannotDeleteRowWithNoActionChildren) {
                                 {3, 1, false}}));
 }
 
-TEST_F(InterleavingTest, CannotDeleteRowWithNoActionGrandChildren) {
+TEST_P(InterleavingTest, CannotDeleteRowWithNoActionGrandChildren) {
   PopulateDatabaseWithNoActionChildren();
 
   // Attempt to delete a row in Users fails since an ON DELETE NO ACTION grand
@@ -263,10 +251,10 @@ TEST_F(InterleavingTest, CannotDeleteRowWithNoActionGrandChildren) {
               IsOkAndHoldsRows({{3, "J.R.R. Tolkien"}}));
 }
 
-TEST_F(InterleavingTest, CannotDeleteRowWithNoActionChildrenSameTransaction) {
+TEST_P(InterleavingTest, CannotDeleteRowWithNoActionChildrenSameTransaction) {
   PopulateDatabaseWithNoActionChildren();
 
-  // Attemp to delete a parent, then delete no-action child does not work.
+  // Attempt to delete a parent, then delete no-action child does not work.
   KeySet parent_key_set;
   parent_key_set.AddKey(Key(1, 1));
   KeySet child_key_set;
@@ -292,7 +280,7 @@ TEST_F(InterleavingTest, CannotDeleteRowWithNoActionChildrenSameTransaction) {
                                 {3, 1, false}}));
 }
 
-TEST_F(InterleavingTest, CannotInsertAndDeleteRowWithNoActionChild) {
+TEST_P(InterleavingTest, CannotInsertAndDeleteRowWithNoActionChild) {
   KeySet parent_key_set;
   parent_key_set.AddKey(Key(1, 1));
   KeySet child_key_set;
@@ -319,7 +307,7 @@ TEST_F(InterleavingTest, CannotInsertAndDeleteRowWithNoActionChild) {
   }));
 }
 
-TEST_F(InterleavingTest, CannotReplaceRowWithNoActionChild) {
+TEST_P(InterleavingTest, CannotReplaceRowWithNoActionChild) {
   PopulateDatabaseWithNoActionChildren();
   EXPECT_THAT(Read("Threads", {"UserId", "ThreadId", "Starred"}, Key(1, 1)),
               IsOkAndHoldsRow({1, 1, true}));
@@ -347,7 +335,7 @@ TEST_F(InterleavingTest, CannotReplaceRowWithNoActionChild) {
               IsOkAndHoldsRow({1, 1, false}));
 }
 
-TEST_F(InterleavingTest, CanReplaceRowWithDeleteActionChild) {
+TEST_P(InterleavingTest, CanReplaceRowWithDeleteActionChild) {
   PopulateDatabase();
   // Parent & child rows exist.
   EXPECT_THAT(Read("Threads", {"UserId", "ThreadId", "Starred"}, Key(1, 1)),
@@ -367,7 +355,15 @@ TEST_F(InterleavingTest, CanReplaceRowWithDeleteActionChild) {
               IsOkAndHoldsRows({}));
 }
 
-class InterleavingNonParentTest : public DatabaseTest {
+class InterleavingNonParentTest
+    : public DatabaseTest,
+      public testing::WithParamInterface<database_api::DatabaseDialect> {
+ public:
+  void SetUp() override {
+    dialect_ = GetParam();
+    DatabaseTest::SetUp();
+  }
+
  public:
   absl::Status SetUpDatabase() override {
     EmulatorFeatureFlags::Flags flags;
@@ -376,39 +372,7 @@ class InterleavingNonParentTest : public DatabaseTest {
 
     // The hierarchy is Users ->(IN) Threads -->(IN) Messages
     //                                       |->(IN PARENT) Snoozes*.
-    return SetSchema({
-        R"(
-        CREATE TABLE Users (
-          UserId     INT64,
-          Name       STRING(MAX),
-        ) PRIMARY KEY (UserId)
-      )",
-        R"(
-        CREATE TABLE Threads (
-          UserId     INT64,
-          ThreadId   INT64,
-          Starred    BOOL
-        ) PRIMARY KEY (UserId, ThreadId),
-        INTERLEAVE IN Users
-      )",
-        R"(
-        CREATE TABLE Messages (
-          UserId     INT64,
-          ThreadId   INT64,
-          MessageId  INT64,
-          Subject    STRING(MAX),
-        ) PRIMARY KEY (UserId, ThreadId, MessageId),
-        INTERLEAVE IN Threads
-      )",
-        R"(
-        CREATE TABLE Snoozes (
-          UserId     INT64,
-          ThreadId   INT64,
-          SnoozeId   INT64,
-          SnoozeTs   Timestamp,
-        ) PRIMARY KEY (UserId, ThreadId, SnoozeId),
-        INTERLEAVE IN PARENT Threads ON DELETE NO ACTION
-      )"});
+    return SetSchemaFromFile("interleaving_non_parent.test");
   }
 
  protected:
@@ -452,7 +416,15 @@ class InterleavingNonParentTest : public DatabaseTest {
   }
 };
 
-TEST_F(InterleavingNonParentTest, InsertChildWithOrWithoutExistingParent) {
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectInterleavingNonParentTest, InterleavingNonParentTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
+    [](const testing::TestParamInfo<InterleavingTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(InterleavingNonParentTest, InsertChildWithOrWithoutExistingParent) {
   ZETASQL_EXPECT_OK(Insert("Users", {"UserId", "Name"}, {1, "Douglas Adams"}));
 
   ZETASQL_EXPECT_OK(Insert("Threads", {"UserId", "ThreadId"}, {1, 11}));
@@ -481,7 +453,7 @@ TEST_F(InterleavingNonParentTest, InsertChildWithOrWithoutExistingParent) {
               IsOkAndHoldsRows({{1, 11, 111}, {2, 21, 211}}));
 }
 
-TEST_F(InterleavingNonParentTest, CanInsertParentAndChildInSameTransaction) {
+TEST_P(InterleavingNonParentTest, CanInsertParentAndChildInSameTransaction) {
   ZETASQL_EXPECT_OK(Commit({
       MakeInsert("Users", {"UserId", "Name"}, 1, "Douglas Adams"),
       MakeInsert("Threads", {"UserId", "ThreadId"}, 1, 11),
@@ -498,7 +470,7 @@ TEST_F(InterleavingNonParentTest, CanInsertParentAndChildInSameTransaction) {
   }));
 }
 
-TEST_F(InterleavingNonParentTest, DeletesDoNotAffectParentOrChildren) {
+TEST_P(InterleavingNonParentTest, DeletesDoNotAffectParentOrChildren) {
   PopulateDatabaseWithInParentChildren();
 
   // Delete a leaf, parent tables are not affected.
@@ -535,7 +507,7 @@ TEST_F(InterleavingNonParentTest, DeletesDoNotAffectParentOrChildren) {
                   {{1, 11, 111}, {1, 13, 131}, {3, 31, 311}, {4, 42, 421}}));
 }
 
-TEST_F(InterleavingNonParentTest, CannotDeleteRowWithNoActionChildren) {
+TEST_P(InterleavingNonParentTest, CannotDeleteRowWithNoActionChildren) {
   PopulateDatabaseWithInParentChildren();
 
   // Attempt to delete a Thread fails since an ON DELETE NO ACTION child exists
@@ -563,11 +535,11 @@ TEST_F(InterleavingNonParentTest, CannotDeleteRowWithNoActionChildren) {
                                 {4, 42, false}}));
 }
 
-TEST_F(InterleavingNonParentTest,
+TEST_P(InterleavingNonParentTest,
        CannotDeleteRowWithNoActionChildrenSameTransaction) {
   PopulateDatabaseWithInParentChildren();
 
-  // Attemp to delete a parent, then delete no-action child does not work.
+  // Attempt to delete a parent, then delete no-action child does not work.
   KeySet parent_key_set;
   parent_key_set.AddKey(Key(1, 11));
   KeySet child_key_set;
@@ -593,7 +565,7 @@ TEST_F(InterleavingNonParentTest,
                                 {4, 42, false}}));
 }
 
-TEST_F(InterleavingNonParentTest,
+TEST_P(InterleavingNonParentTest,
        DeleteTopLevelRowWithInterleaveInChildrenAndInParentGrandChildren) {
   KeySet parent_key_set;
   parent_key_set.AddKey(Key(1, 11));
@@ -630,7 +602,11 @@ TEST_F(InterleavingNonParentTest,
   }));
 }
 
-TEST_F(InterleavingNonParentTest, CannotMigrateToInParentWithMissingParentRow) {
+TEST_P(InterleavingNonParentTest, CannotMigrateToInParentWithMissingParentRow) {
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP() << "PostgreSQL dialect does not allow NULLABLE primary keys";
+  }
+
   ZETASQL_EXPECT_OK(Insert("Threads", {"UserId"}, {1}));  // ThreadId is NULL
   ZETASQL_EXPECT_OK(Insert("Messages", {"UserId", "MessageId"}, {1, 1}));
   ZETASQL_EXPECT_OK(Insert("Messages", {"UserId", "ThreadId", "MessageId"}, {2, 2, 2}));
@@ -645,7 +621,7 @@ TEST_F(InterleavingNonParentTest, CannotMigrateToInParentWithMissingParentRow) {
                                  "validation failed")));
 }
 
-TEST_F(InterleavingNonParentTest,
+TEST_P(InterleavingNonParentTest,
        CanDeleteAndReplaceRowWithDeleteCascadeGrandChild) {
   ZETASQL_EXPECT_OK(UpdateSchema({
       R"(

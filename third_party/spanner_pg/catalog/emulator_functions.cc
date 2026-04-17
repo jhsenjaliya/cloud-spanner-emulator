@@ -1529,28 +1529,6 @@ std::unique_ptr<zetasql::Function> TimestamptzBinFunction(
       function_options);
 }
 
-absl::StatusOr<zetasql::Value> EvalTimestamptzTrunc(
-    absl::Span<const zetasql::Value> args) {
-  ZETASQL_RET_CHECK(args.size() == 2 || args.size() == 3);
-  if (HasNullValue(args)) {
-    return zetasql::Value::NullTimestamp();
-  }
-  auto unix_picos = args[1].ToUnixPicos();
-  if (args.size() == 2) {
-    ZETASQL_ASSIGN_OR_RETURN(absl::Time time,
-                     PgTimestamptzTrunc(args[0].string_value(),
-                                        unix_picos.ToAbslTime()));
-    return zetasql::Value::Timestamp(time);
-  } else {
-    ZETASQL_ASSIGN_OR_RETURN(
-        absl::Time time,
-        PgTimestamptzTrunc(args[0].string_value(),
-                           unix_picos.ToAbslTime(),
-                           args[2].string_value()));
-    return zetasql::Value::Timestamp(time);
-  }
-}
-
 std::unique_ptr<zetasql::Function> TimestamptzTruncFunction(
     const std::string& catalog_name) {
   zetasql::FunctionOptions function_options;
@@ -3977,6 +3955,27 @@ std::unique_ptr<zetasql::Function> JsonbFloatArrayExtractionFunction(
 }
 
 }  // namespace
+
+absl::StatusOr<zetasql::Value> EvalTimestamptzTrunc(
+    absl::Span<const zetasql::Value> args) {
+  ZETASQL_RET_CHECK(args.size() == 2 || args.size() == 3);
+  if (HasNullValue(args)) {
+    return zetasql::Value::NullTimestamp();
+  }
+  auto unix_picos = args[1].ToUnixPicos();
+  if (args.size() == 2) {
+    ZETASQL_ASSIGN_OR_RETURN(
+        absl::Time time,
+        PgTimestamptzTrunc(args[0].string_value(), unix_picos.ToAbslTime()));
+    return zetasql::Value::Timestamp(time);
+  } else {
+    ZETASQL_ASSIGN_OR_RETURN(
+        absl::Time time,
+        PgTimestamptzTrunc(args[0].string_value(), unix_picos.ToAbslTime(),
+                           args[2].string_value()));
+    return zetasql::Value::Timestamp(time);
+  }
+}
 
 absl::StatusOr<zetasql::Value> EvalToChar(
   absl::Span<const zetasql::Value> args) {

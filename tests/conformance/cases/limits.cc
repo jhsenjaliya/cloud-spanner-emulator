@@ -20,6 +20,7 @@
 #include <tuple>
 #include <vector>
 
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "zetasql/base/testing/status_matchers.h"
@@ -41,6 +42,8 @@ namespace {
 using zetasql_base::testing::StatusIs;
 
 class LimitsTest : public DatabaseTest {
+ public:
+  void SetUp() override { DatabaseTest::SetUp(); }
   absl::Status SetUpDatabase() override { return absl::OkStatus(); }
 };
 
@@ -426,21 +429,38 @@ TEST_F(LimitsTest, MaxTableInterleavingDepth) {
   std::vector<std::string> statements;
   int i = 0;
   for (; i < 7; ++i) {
-    std::string create_table_statement = absl::StrFormat(
-        "CREATE TABLE table_%d ( ID INT64 NOT NULL, ) PRIMARY KEY (ID) ", i);
+    std::string create_table_statement;
+    if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+      create_table_statement = absl::StrFormat(
+          "CREATE TABLE table_%d ( ID int8_t NOT NULL PRIMARY KEY ) ", i);
+    } else {
+      create_table_statement = absl::StrFormat(
+          "CREATE TABLE table_%d ( ID INT64 NOT NULL, ) PRIMARY KEY (ID) ", i);
+    }
     if (i > 0) {
-      absl::StrAppend(&create_table_statement, ", INTERLEAVE IN PARENT ",
+      absl::StrAppend(&create_table_statement,
+                      dialect_ == database_api::DatabaseDialect::POSTGRESQL
+                          ? "INTERLEAVE IN PARENT "
+                          : ", INTERLEAVE IN PARENT ",
                       absl::StrFormat("table_%d", (i - 1)));
     }
     statements.emplace_back(create_table_statement);
   }
   ZETASQL_EXPECT_OK(UpdateSchema(statements));
 
-  EXPECT_THAT(UpdateSchema({absl::StrFormat(
-                  "CREATE TABLE table_%d ( ID INT64 NOT NULL, ) PRIMARY KEY "
-                  "(ID), INTERLEAVE IN PARENT table_%d",
-                  i, (i - 1))}),
-              StatusIs(absl::StatusCode::kFailedPrecondition));
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    EXPECT_THAT(UpdateSchema({absl::StrFormat(
+                    "CREATE TABLE table_%d ( ID int8_t NOT NULL PRIMARY KEY ) "
+                    "INTERLEAVE IN PARENT table_%d",
+                    i, (i - 1))}),
+                StatusIs(absl::StatusCode::kFailedPrecondition));
+  } else {
+    EXPECT_THAT(UpdateSchema({absl::StrFormat(
+                    "CREATE TABLE table_%d ( ID INT64 NOT NULL, ) PRIMARY KEY "
+                    "(ID), INTERLEAVE IN PARENT table_%d",
+                    i, (i - 1))}),
+                StatusIs(absl::StatusCode::kFailedPrecondition));
+  }
 }
 
 TEST_F(LimitsTest, MaxValueSize) {

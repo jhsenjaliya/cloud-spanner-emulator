@@ -1018,7 +1018,7 @@ TEST_P(DmlTest, InsertOnConflictDmlOnUniqueIndexAsConflictTarget) {
                                          {1, 10, 11, "updated_A", "UPDATE"}}));
 }
 
-TEST_P(DmlTest, DISABLED_InsertOnConflictDmlNamedSchema) {
+TEST_P(DmlTest, InsertOnConflictDmlNamedSchema) {
   // Skip the test in PG since we cannot create a non null filtered unique index
   // in PG.
   if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) GTEST_SKIP();
