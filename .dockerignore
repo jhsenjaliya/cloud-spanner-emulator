@@ -1,4 +1,8 @@
-bazel-*
+bazel-bin
+bazel-out
+bazel-genfiles
+bazel-testlogs
+bazel-cloud-spanner-emulator
 .git
 .gitignore
 *.md
