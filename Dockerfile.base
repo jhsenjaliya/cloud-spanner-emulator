@@ -7,9 +7,9 @@
 FROM gcr.io/cloud-spanner-emulator/devcontainer
 
 # Inject corporate CA certificates via shared script
-COPY corporate-ca.pem /tmp/corporate-ca.pem
-COPY inject-certs.sh /tmp/inject-certs.sh
-RUN chmod +x /tmp/inject-certs.sh && /tmp/inject-certs.sh /tmp/corporate-ca.pem
+#COPY corporate-ca.pem /tmp/corporate-ca.pem
+#COPY inject-certs.sh /tmp/inject-certs.sh
+#RUN chmod +x /tmp/inject-certs.sh && /tmp/inject-certs.sh /tmp/corporate-ca.pem
 
 # Install GCC 13 (ZetaSQL needs C++20, spanner_pg needs C23 enum:int — GCC 13 supports both)
 RUN apt-get update && \
@@ -21,7 +21,7 @@ RUN apt-get update && \
                         --slave /usr/bin/g++ g++ /usr/bin/g++-13 && \
     rm -rf /var/lib/apt/lists/*
 
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+#ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV GOPROXY=direct
 ENV GONOSUMCHECK=*
 ENV GONOSUMDB=*
