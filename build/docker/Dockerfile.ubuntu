@@ -95,7 +95,9 @@ RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
       -- ... -third_party/spanner_pg/src/... && \
     mkdir -p /build/output && \
     cp -L bazel-bin/binaries/emulator_main /build/output/ && \
-    cp -L bazel-bin/binaries/gateway_main_/gateway_main /build/output/
+    cp -L bazel-bin/binaries/gateway_main_/gateway_main /build/output/ && \
+    strip /build/output/emulator_main && \
+    strip /build/output/gateway_main
 
 # Generate licenses file.
 RUN for file in $(find -L src/bazel-src/external                               \
