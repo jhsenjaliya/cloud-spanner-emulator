@@ -109,26 +109,26 @@ switched_rules_by_language(
 # Go Build Support                                                             #
 ################################################################################
 
-_rules_go_version = "v0.48.1"
+_rules_go_version = "v0.60.0"
 
 http_archive(
     name = "io_bazel_rules_go",
-    sha256 = "b2038e2de2cace18f032249cb4bb0048abf583a36369fa98f687af1b3f880b26",
+    sha256 = "86d3dc8f59d253524f933aaf2f3c05896cb0b605fc35b460c0b4b039996124c6",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/{0}/rules_go-{0}.zip".format(_rules_go_version),
-        "https://github.com/bazelbuild/rules_go/releases/download/{0}/rules_go-{0}.zip.format(_rules_go_version)",
+        "https://mirror.bazel.build/github.com/bazel-contrib/rules_go/releases/download/{0}/rules_go-{0}.zip".format(_rules_go_version),
+        "https://github.com/bazel-contrib/rules_go/releases/download/{0}/rules_go-{0}.zip".format(_rules_go_version),
     ],
 )
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 
-go_register_toolchains(version = "1.24.13")
+go_register_toolchains(version = "1.26.2")
 
-_bazel_gazelle_version = "0.36.0"
+_bazel_gazelle_version = "0.47.0"
 
 http_archive(
     name = "bazel_gazelle",
-    sha256 = "75df288c4b31c81eb50f51e2e14f4763cb7548daae126817247064637fd9ea62",
+    sha256 = "675114d8b433d0a9f54d81171833be96ebc4113115664b791e6f204d58e93446",
     urls = [
         "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v{0}/bazel-gazelle-v{0}.tar.gz".format(_bazel_gazelle_version),
         "https://github.com/bazelbuild/bazel-gazelle/releases/download/v{0}/bazel-gazelle-v{0}.tar.gz".format(_bazel_gazelle_version),
@@ -147,8 +147,8 @@ go_repository(
     build_file_proto_mode = "disable_global",
     importpath = "google.golang.org/grpc",
     repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
-    sum = "h1:LKtvyfbX3UGVPFcGqJ9ItpVWW6oN/2XqTxfAnwRRXiA=",
-    version = "v1.64.1",
+    sum = "h1:sybAEdRIEtvcD68Gx7dmnwjZKlyfuc61Dyo9pGXXkKE=",
+    version = "v1.79.3",
 )
 
 go_repository(
@@ -156,8 +156,8 @@ go_repository(
     build_file_proto_mode = "disable_global",
     importpath = "google.golang.org/genproto",
     repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
-    sum = "h1:F6qOa9AZTYJXOUEr4jDysRDLrm4PHePlge4v4TGAlxY=",
-    version = "v0.0.0-20240227224415-6ceb2ff114de",
+    sum = "h1:GvESR9BIyHUahIb0NcTum6itIWtdoglGX+rnGxm2934=",
+    version = "v0.0.0-20251202230838-ff82c1b0f217",
 )
 
 go_repository(
@@ -167,22 +167,22 @@ go_repository(
     patch_args = ["-p1"],
     patches = ["//build/bazel:golang_protobuf.patch"],
     repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
-    sum = "h1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=",
-    version = "v1.34.2",
+    sum = "h1:AYd7cD/uASjIL6Q9LiTjz8JLcrh/88q5UObnmY3aOOE=",
+    version = "v1.36.10",
 )
 
 go_repository(
     name = "org_golang_google_genproto_googleapis_api",
     importpath = "google.golang.org/genproto/googleapis/api",
-    sum = "h1:kHjw/5UfflP/L5EbledDrcG4C2597RtymmGRZvHiCuY=",
-    version = "v0.0.0-20240711142825-46eb208f015d",
+    sum = "h1:fCvbg86sFXwdrl5LgVcTEvNC+2txB5mgROGmRL5mrls=",
+    version = "v0.0.0-20251202230838-ff82c1b0f217",
 )
 
 go_repository(
     name = "org_golang_google_genproto_googleapis_rpc",
     importpath = "google.golang.org/genproto/googleapis/rpc",
-    sum = "h1:JU0iKnSg02Gmb5ZdV8nYsKEKsP6o/FGVWTrw4i1DA9A=",
-    version = "v0.0.0-20240711142825-46eb208f015d",
+    sum = "h1:gRkg/vSppuSQoDjxyiGfN4Upv/h/DQmIR10ZU8dh4Ww=",
+    version = "v0.0.0-20251202230838-ff82c1b0f217",
 )
 
 go_repository(
@@ -227,12 +227,21 @@ go_repository(
 )
 
 go_repository(
+    name = "org_golang_x_crypto",
+    build_file_proto_mode = "disable_global",
+    importpath = "golang.org/x/crypto",
+    repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
+    sum = "h1:ihbySMvVjLAeSH1IbfcRTkD/iNscyz8rGzjF/E5hV6U=",
+    version = "v0.31.0",
+)
+
+go_repository(
     name = "org_golang_x_net",
     build_file_proto_mode = "disable_global",
     importpath = "golang.org/x/net",
     repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
-    sum = "h1:soB7SVo0PWrY4vPW/+ay0jKDNScG2X9wFeYlXIvJsOQ=",
-    version = "v0.26.0",
+    sum = "h1:zyQRTTrjc33Lhh0fBgT/H3oZq9WuvRR5gPC70xpDiQU=",
+    version = "v0.48.0",
 )
 
 go_repository(
@@ -240,8 +249,8 @@ go_repository(
     build_file_proto_mode = "disable_global",
     importpath = "golang.org/x/sys",
     repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
-    sum = "h1:rF+pYz3DAGSQAxAu1CbC7catZg4ebC4UIeIhKxBZvws=",
-    version = "v0.21.0",
+    sum = "h1:CvCKL8MeisomCi6qNZ+wbb0DN9E5AATixKsvNtMoMFk=",
+    version = "v0.39.0",
 )
 
 go_repository(
@@ -249,8 +258,8 @@ go_repository(
     build_file_proto_mode = "disable_global",
     importpath = "golang.org/x/text",
     repo_mapping = {"@go_googleapis": "@com_google_googleapis"},
-    sum = "h1:a94ExnEXNtEwYLGJSIUxnWoxoRz/ZcCsV63ROupILh4=",
-    version = "v0.16.0",
+    sum = "h1:ZD01bjUt1FQ9WJ0ClOL5vxgxOI/sVCNgX1YtKwcY0mU=",
+    version = "v0.32.0",
 )
 
 ################################################################################
@@ -515,7 +524,7 @@ http_archive(
 http_archive(
     name = "zlib",
     build_file = "//build/bazel:zlib.BUILD",
-    sha256 = "c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1",
+    sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
     strip_prefix = "zlib-1.3.1",
     urls = ["http://zlib.net/fossils/zlib-1.3.1.tar.gz"],
 )
