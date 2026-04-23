@@ -5,9 +5,10 @@
 #   ./build.sh                                # online build (fetches deps from network)
 #   ./build.sh --offline-dir=bazel-distdir    # offline build (uses pre-downloaded deps)
 #
-# When --offline-dir is set, dependencies listed in WORKSPACE are pre-downloaded
-# into the specified directory, then passed as --build-arg OFFLINE_DIR=<dir> so
-# Bazel uses those cached archives instead of hitting the network.
+# When --offline-dir is set, `bazel fetch` is run on the host to populate Bazel's
+# repository cache (sha256-addressed, includes ALL transitive deps), then the
+# cache is passed into Docker via --build-arg OFFLINE_DIR so Bazel uses the
+# cached archives instead of hitting the network.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,7 +27,7 @@ IMAGE_TAG="spanner-emulator-build"
 echo "============================================"
 echo "  Building Spanner Emulator"
 if [ -n "$OFFLINE_DIR" ]; then
-  echo "  Mode: offline (distdir: $OFFLINE_DIR)"
+  echo "  Mode: offline (repo cache: $OFFLINE_DIR)"
 else
   echo "  Mode: online"
 fi
@@ -36,25 +37,46 @@ BUILD_START=$(date +%s)
 
 BUILD_ARGS=()
 
-# For offline mode, populate the distdir with deps from WORKSPACE
+# For offline mode, use bazel fetch to populate the repository cache
 if [ -n "$OFFLINE_DIR" ]; then
   DISTDIR="$SCRIPT_DIR/$OFFLINE_DIR"
   mkdir -p "$DISTDIR"
 
   echo ""
-  echo "[1/3] Downloading dependencies to $OFFLINE_DIR/..."
-  grep -A2 'urls\s*=' WORKSPACE | grep -oE 'https?://[^"]+' | sort -u | while read url; do
-    fname=$(basename "$url")
-    if [ ! -f "$DISTDIR/$fname" ]; then
-      echo "  GET: $fname"
-      curl -kL --max-time 300 -o "$DISTDIR/$fname" "$url" 2>/dev/null || echo "  WARN: Failed $fname"
+  echo "[1/3] Populating repository cache in $OFFLINE_DIR/..."
+
+  # Pre-download the Bazel binary itself so Docker doesn't need network for it
+  BAZEL_VERSION=$(cat .bazelversion | tr -d '[:space:]')
+  for arch in amd64 arm64; do
+    bazel_fname="bazel-${BAZEL_VERSION}-linux-${arch}"
+    if [ ! -f "$DISTDIR/$bazel_fname" ]; then
+      echo "  GET: $bazel_fname"
+      curl -kL --max-time 600 \
+        -o "$DISTDIR/$bazel_fname" \
+        "https://releases.bazel.build/${BAZEL_VERSION}/release/${bazel_fname}" 2>/dev/null \
+        || echo "  WARN: Failed $bazel_fname"
     fi
   done
-  echo "  $(ls "$DISTDIR" | wc -l | tr -d ' ') files in distdir"
+
+  # Use bazel fetch to download ALL deps (including transitive) into the
+  # repository cache. This is much more reliable than grepping URLs from
+  # WORKSPACE, which misses transitive deps and template URLs.
+  if command -v bazel >/dev/null 2>&1; then
+    echo "  Running bazel fetch to discover all deps..."
+    bazel fetch --repository_cache="$DISTDIR" \
+      //... -- -third_party/spanner_pg/src/... 2>&1 \
+      | grep -E "^(INFO|WARNING)" | head -20 || true
+    echo "  Repository cache populated"
+  else
+    echo "  WARN: bazel not found on host, skipping fetch."
+    echo "  Install bazel/bazelisk to enable full offline builds."
+  fi
+
+  echo "  $(find "$DISTDIR" -type f | wc -l | tr -d ' ') files in repo cache"
   BUILD_ARGS+=(--build-arg "OFFLINE_DIR=$OFFLINE_DIR")
 else
   echo ""
-  echo "[1/3] Skipping distdir (online mode)..."
+  echo "[1/3] Skipping repo cache (online mode)..."
 fi
 
 # Build
