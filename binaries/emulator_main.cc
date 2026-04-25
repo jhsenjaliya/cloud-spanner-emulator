@@ -24,7 +24,6 @@
 #include "absl/strings/str_cat.h"
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
-#include "backend/database/database.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "common/config.h"
 #include "frontend/persistence/metadata_store.h"
@@ -92,21 +91,12 @@ static void RestoreFromMetadata(Server* server) {
         extra_ddl.push_back(stmt);
       }
 
-      // Seed ID generators from persisted counters so restored schemas get
-      // the same table/column IDs used to write data to LevelDB.
-      google::spanner::emulator::backend::Database::IdCounterValues counters{
-          .table_id = db_info.id_counters.table_id,
-          .column_id = db_info.id_counters.column_id,
-          .change_stream_id = db_info.id_counters.change_stream_id,
-      };
-
       auto db_or = env->database_manager()->CreateDatabase(
           database_uri,
           google::spanner::emulator::backend::SchemaChangeOperation{
               .statements = extra_ddl,
               .database_dialect = dialect,
-          },
-          counters);
+          });
 
       if (!db_or.ok()) {
         ABSL_LOG(ERROR) << "Failed to restore database " << database_uri

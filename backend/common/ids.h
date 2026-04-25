@@ -50,12 +50,6 @@ class UniqueIdGenerator {
     return IdType{next_seq_++};
   }
 
-  // Returns the current counter value (next ID that will be assigned).
-  int64_t current_value() const ABSL_LOCKS_EXCLUDED(mu_) {
-    absl::MutexLock lock(&mu_);
-    return next_seq_;
-  }
-
  private:
   absl::Mutex mu_;
   int64_t next_seq_ ABSL_GUARDED_BY(mu_);

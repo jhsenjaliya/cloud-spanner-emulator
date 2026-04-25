@@ -58,30 +58,12 @@ namespace database_api = ::google::spanner::admin::database::v1;
 // schemas, queries, storage etc. and acts as a container for these subsystems.
 class Database {
  public:
-  // ID counter values for persistence. Used to seed generators on restore
-  // so that IDs don't collide with data already written to LevelDB.
-  struct IdCounterValues {
-    int64_t table_id = 0;
-    int64_t column_id = 0;
-    int64_t change_stream_id = 0;
-  };
-
   // Constructs a fully initialized database with schema created using
   // create_statements. Returns an error if create_statements are invalid, or if
   // failed to create the database.
   static absl::StatusOr<std::unique_ptr<Database>> Create(
       Clock* clock, std::string_view database_id,
       const SchemaChangeOperation& schema_change_operation);
-
-  // Overload that seeds ID generators from persisted counter values.
-  // Used during restore to ensure IDs don't collide with existing data.
-  static absl::StatusOr<std::unique_ptr<Database>> Create(
-      Clock* clock, std::string_view database_id,
-      const SchemaChangeOperation& schema_change_operation,
-      const IdCounterValues& id_counters);
-
-  // Returns the current ID counter values for persistence.
-  IdCounterValues GetIdCounterValues() const;
 
   // Creates a read only transaction attached to this database.
   absl::StatusOr<std::unique_ptr<ReadOnlyTransaction>>

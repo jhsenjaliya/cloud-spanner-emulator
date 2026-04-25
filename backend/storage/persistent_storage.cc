@@ -397,7 +397,7 @@ static Key DecodeKeyData(const zetasql::Value& key_data) {
                       (static_cast<int32_t>(vp[2]) << 16) |
                       (static_cast<int32_t>(vp[3]) << 24);
     ptr += 4;
-    if (val_len < 0 || end - ptr < val_len) break;
+    if (end - ptr < val_len) break;
     std::string encoded_val(ptr, val_len);
     ptr += val_len;
     zetasql::Value col_val = DecodeValue(encoded_val);

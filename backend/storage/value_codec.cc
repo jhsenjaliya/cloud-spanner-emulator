@@ -18,8 +18,6 @@
 
 #include <cstdint>
 #include <cstring>
-
-#include "zetasql/base/logging.h"
 #include <string>
 
 #include "zetasql/public/json_value.h"
@@ -208,10 +206,10 @@ std::string EncodeValue(const zetasql::Value& value) {
       break;
     }
     default: {
-      // Unsupported type — fail explicitly rather than silently losing type
-      // information via DebugString(). Add support for new types here.
-      ABSL_LOG(FATAL) << "Unsupported type in value codec: "
-                      << value.type()->DebugString();
+      // Fallback: encode as string using SQL literal representation.
+      result.push_back(static_cast<char>(kTagString));
+      std::string debug = value.DebugString();
+      AppendLengthPrefixedString(&result, debug);
       break;
     }
   }

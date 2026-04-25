@@ -174,14 +174,6 @@ absl::Status CreateDatabase(RequestContext* ctx,
       printed_ddl = *printed_or;
     }
     ms->AddDatabase(request->parent(), database_name, dialect_str, printed_ddl);
-    // Persist ID counters so restored schemas get the same table/column IDs.
-    auto counters = database->backend()->GetIdCounterValues();
-    ms->UpdateIdCounters(request->parent(), database_name,
-                         frontend::MetadataStore::IdCounters{
-                             .table_id = counters.table_id,
-                             .column_id = counters.column_id,
-                             .change_stream_id = counters.change_stream_id,
-                         });
     auto save_status = ms->Save();
     if (!save_status.ok()) {
       ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
@@ -283,14 +275,6 @@ absl::Status UpdateDatabaseDdl(
       std::string instance_uri =
           MakeInstanceUri(project_id, instance_id);
       ms->UpdateDdl(instance_uri, std::string(database_id), *printed_or);
-      // Persist updated ID counters after schema change.
-      auto counters = backend_database->GetIdCounterValues();
-      ms->UpdateIdCounters(instance_uri, std::string(database_id),
-                           frontend::MetadataStore::IdCounters{
-                               .table_id = counters.table_id,
-                               .column_id = counters.column_id,
-                               .change_stream_id = counters.change_stream_id,
-                           });
       auto save_status = ms->Save();
       if (!save_status.ok()) {
         ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
