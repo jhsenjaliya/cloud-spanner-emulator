@@ -84,7 +84,12 @@ ENV BAZEL_CXXOPTS="-std=c++17"
 ARG BAZEL_VERSION=6.5.0
 ARG OFFLINE_DIR=
 COPY ${OFFLINE_DIR:-.bazelversion} /tmp/bazel-source/
-RUN BAZEL_BIN="bazel-${BAZEL_VERSION}-linux-${TARGETARCH}" && \
+RUN case "${TARGETARCH}" in \
+      amd64) BAZEL_ARCH="x86_64" ;; \
+      arm64) BAZEL_ARCH="arm64" ;; \
+      *)     BAZEL_ARCH="${TARGETARCH}" ;; \
+    esac && \
+    BAZEL_BIN="bazel-${BAZEL_VERSION}-linux-${BAZEL_ARCH}" && \
     if [ -f "/tmp/bazel-source/${BAZEL_BIN}" ]; then \
       cp "/tmp/bazel-source/${BAZEL_BIN}" /usr/local/bin/bazel; \
     else \
