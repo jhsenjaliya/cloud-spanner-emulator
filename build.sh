@@ -34,7 +34,7 @@ echo "  Started: $(date)"
 echo "============================================"
 BUILD_START=$(date +%s)
 
-BUILD_ARGS=()
+BUILD_ARGS=""
 
 # For offline mode, populate the distdir with deps from WORKSPACE
 if [ -n "$OFFLINE_DIR" ]; then
@@ -51,7 +51,7 @@ if [ -n "$OFFLINE_DIR" ]; then
     fi
   done
   echo "  $(ls "$DISTDIR" | wc -l | tr -d ' ') files in distdir"
-  BUILD_ARGS+=(--build-arg "OFFLINE_DIR=$OFFLINE_DIR")
+  BUILD_ARGS="--build-arg OFFLINE_DIR=$OFFLINE_DIR"
 else
   echo ""
   echo "[1/3] Skipping distdir (online mode)..."
@@ -62,7 +62,7 @@ echo ""
 echo "[2/3] Building emulator in Docker..."
 DOCKER_BUILDKIT=1 docker build --progress=plain \
   -f "$DOCKERFILE" \
-  "${BUILD_ARGS[@]}" \
+  ${BUILD_ARGS:+"$BUILD_ARGS"} \
   -t "$IMAGE_TAG" .
 
 # Extract binaries
