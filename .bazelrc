@@ -20,15 +20,10 @@ build --copt   -Wno-deprecated-declarations
 build --copt   -Wno-return-type
 build --copt   -Wno-unused-but-set-parameter
 
-# Reduce optimization on ALL external C++ deps.
-# ZetaSQL, ICU, gRPC, protobuf compile 2-4x faster at -O1 vs -O3.
-# This is a dev emulator — runtime perf of these deps is irrelevant.
-# The original 4-file rules are subsumed by the blanket ZetaSQL rule.
-build --per_file_copt=+external/com_google_zetasql/.*\.cc@-O1
-build --per_file_copt=+external/com_google_icu/.*\.c@-O1
-build --per_file_copt=+external/com_google_icu/.*\.cc@-O1
-build --per_file_copt=+external/com_github_grpc_grpc/.*\.cc@-O1
-build --per_file_copt=+external/com_google_protobuf/.*\.cc@-O1
-
-# Guard against concurrent cache corruption
-build --experimental_guard_against_concurrent_changes
+# Reduce optimization on ZetaSQL AST rewrite visitors. These ~10 files each
+# take 100+ seconds and ~4GB RAM at -O3. At -O1 they compile in ~30s with ~1GB.
+# This is a dev emulator — runtime perf of these files is irrelevant.
+build --per_file_copt=+.*resolved_ast_rewrite_visitor.*\.cc@-O1
+build --per_file_copt=+.*resolved_ast_deep_copy_visitor.*\.cc@-O1
+build --per_file_copt=+.*rewrite_subpipeline.*\.cc@-O1
+build --per_file_copt=+.*resolved_ast\.cc@-O1
