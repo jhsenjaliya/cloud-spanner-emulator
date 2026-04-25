@@ -66,9 +66,30 @@ Database::Database()
 absl::StatusOr<std::unique_ptr<Database>> Database::Create(
     Clock* clock, std::string_view database_id,
     const SchemaChangeOperation& schema_change_operation) {
+  return Create(clock, database_id, schema_change_operation, IdCounterValues{});
+}
+
+absl::StatusOr<std::unique_ptr<Database>> Database::Create(
+    Clock* clock, std::string_view database_id,
+    const SchemaChangeOperation& schema_change_operation,
+    const IdCounterValues& id_counters) {
   auto database = absl::WrapUnique(new Database());
   database->clock_ = clock;
   database->database_id_ = database_id;
+
+  // Seed ID generators from persisted values so that restored schemas get
+  // the same table/column IDs that were used to write data to LevelDB.
+  if (id_counters.table_id > 0) {
+    database->table_id_generator_ = TableIDGenerator(id_counters.table_id);
+  }
+  if (id_counters.column_id > 0) {
+    database->column_id_generator_ = ColumnIDGenerator(id_counters.column_id);
+  }
+  if (id_counters.change_stream_id > 0) {
+    database->change_stream_id_generator_ =
+        ChangeStreamIDGenerator(id_counters.change_stream_id);
+  }
+
   std::string data_dir = config::data_dir();
   if (!data_dir.empty()) {
     // Use persistent storage with a per-database subdirectory.
@@ -226,6 +247,14 @@ absl::Status Database::UpdateSchema(
 
 const Schema* Database::GetLatestSchema() const {
   return versioned_catalog_->GetLatestSchema();
+}
+
+Database::IdCounterValues Database::GetIdCounterValues() const {
+  return IdCounterValues{
+      .table_id = table_id_generator_.current_value(),
+      .column_id = column_id_generator_.current_value(),
+      .change_stream_id = change_stream_id_generator_.current_value(),
+  };
 }
 
 }  // namespace backend
