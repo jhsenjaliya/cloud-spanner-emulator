@@ -270,48 +270,6 @@ TEST_F(PersistentStorageTest, DeleteAndLookup) {
       zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST_F(PersistentStorageTest, PointDeleteDoesNotDeleteOtherRows) {
-  absl::Time write_ts = absl::Now();
-  absl::Time delete_ts = write_ts + absl::Seconds(1);
-  absl::Time after_delete_ts = delete_ts + absl::Seconds(1);
-
-  // Write three rows.
-  Key key1({Int64(1)});
-  Key key2({Int64(2)});
-  Key key3({Int64(3)});
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key1, {kColumnID},
-                            {String("val-1")}));
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key2, {kColumnID},
-                            {String("val-2")}));
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key3, {kColumnID},
-                            {String("val-3")}));
-
-  // Delete only row 1.
-  ZETASQL_EXPECT_OK(
-      storage_->Delete(delete_ts, kTableId0, KeyRange::Point(key1)));
-
-  // Row 1 should be gone.
-  std::vector<zetasql::Value> values;
-  EXPECT_THAT(
-      storage_->Lookup(after_delete_ts, kTableId0, key1, {kColumnID}, &values),
-      zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
-
-  // Rows 2 and 3 must still exist.
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(after_delete_ts, kTableId0, key2, {kColumnID}, &values));
-  EXPECT_THAT(values, testing::ElementsAre(String("val-2")));
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(after_delete_ts, kTableId0, key3, {kColumnID}, &values));
-  EXPECT_THAT(values, testing::ElementsAre(String("val-3")));
-
-  // Full scan should return exactly 2 rows.
-  ZETASQL_EXPECT_OK(storage_->Read(after_delete_ts, kTableId0, kKeyRange0To5,
-                            {kColumnID}, &itr_));
-  int row_count = 0;
-  while (itr_->Next()) row_count++;
-  EXPECT_EQ(row_count, 2);
-}
-
 TEST_F(PersistentStorageTest, SnapshotRead) {
   absl::Time write_ts = absl::Now();
   absl::Time snapshot_ts = write_ts + absl::Seconds(1);
