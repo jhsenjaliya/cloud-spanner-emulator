@@ -149,8 +149,8 @@ COPY . /src/
 # of fetching from the network.
 # BAZEL_JOBS / BAZEL_RAM: tune parallelism for constrained environments.
 ARG OFFLINE_DIR=
-ARG BAZEL_JOBS=4
-ARG BAZEL_RAM=HOST_RAM*.5
+ARG BAZEL_JOBS=auto
+ARG BAZEL_RAM=HOST_RAM*.67
 RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
     --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
     cd /src && \

@@ -31,15 +31,5 @@ build --per_file_copt=+.*com_google_icu/.*\.cc@-O1
 build --per_file_copt=+.*grpc/.*\.cc@-O1
 build --per_file_copt=+.*com_google_protobuf/.*\.cc@-O1
 
-# ZetaSQL rewriter/visitor files are the worst offenders — even -O1 uses ~2GB.
-# Drop to -O0 so they compile in seconds with minimal RAM.
-# -O0 is applied AFTER -O1 (last flag wins in GCC), so these override the
-# blanket -O1 rule above for these specific files.
-build --per_file_copt=+.*resolved_ast_rewrite_visitor.*\.cc@-O0
-build --per_file_copt=+.*resolved_ast_deep_copy_visitor.*\.cc@-O0
-build --per_file_copt=+.*generalized_query_stmt_rewriter.*\.cc@-O0
-build --per_file_copt=+.*rewrite_subpipeline.*\.cc@-O0
-build --per_file_copt=+.*resolved_ast\.cc@-O0
-
 # Guard against concurrent cache corruption
 build --experimental_guard_against_concurrent_changes
