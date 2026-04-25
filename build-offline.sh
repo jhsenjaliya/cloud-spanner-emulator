@@ -1,5 +1,5 @@
 #!/bin/bash
-# Offline build: uses cached base image + pre-downloaded deps
+# Offline build: pre-downloads ALL Bazel dependencies, then builds in Docker
 # Works behind corporate proxies that block downloads inside Docker
 set -e
 
@@ -11,70 +11,61 @@ mkdir -p "$DISTDIR"
 
 echo "============================================"
 echo "  Spanner Emulator Offline Build"
-echo "  Started: $(date)"
 echo "============================================"
-BUILD_START=$(date +%s)
 
-# Step 1: Ensure base image exists (GCC 13, certs — cached, ~5 min first time only)
+# Step 1: Extract ALL URLs from WORKSPACE and download them locally
 echo ""
-echo "[1/4] Checking base image..."
-STEP1_START=$(date +%s)
-if docker image inspect spanner-emulator-base >/dev/null 2>&1; then
-    echo "  Base image exists (cached). Skipping."
-else
-    echo "  Building base image (first time only)..."
-    docker build --progress=plain -f Dockerfile.base -t spanner-emulator-base .
-fi
-STEP1_END=$(date +%s)
-echo ">>> Step 1 (Base image): $((STEP1_END - STEP1_START))s"
-
-# Step 2: Download any missing deps
-echo ""
-echo "[2/4] Checking Bazel dependencies..."
-STEP2_START=$(date +%s)
+echo "[1/3] Downloading Bazel dependencies..."
 grep -A2 'urls\s*=' WORKSPACE | grep -oE 'https?://[^"]+' | sort -u | while read url; do
     fname=$(basename "$url")
     if [ -f "$DISTDIR/$fname" ]; then
-        :
+        echo "  HAVE: $fname"
     else
         echo "  GET:  $fname"
         curl -kL --max-time 300 -o "$DISTDIR/$fname" "$url" 2>/dev/null || echo "  WARN: Failed to download $fname"
     fi
 done
 echo "  $(ls "$DISTDIR" | wc -l | tr -d ' ') files in distdir"
-STEP2_END=$(date +%s)
-echo ">>> Step 2 (Deps check): $((STEP2_END - STEP2_START))s"
 
-# Step 3: Build in Docker (BuildKit enabled for cache mounts)
+# Step 1b: Download Bazel-internal deps (not listed in WORKSPACE but required)
 echo ""
-echo "[3/4] Building emulator + running tests..."
-STEP3_START=$(date +%s)
-DOCKER_BUILDKIT=1 docker build --progress=plain -f Dockerfile.offline -t spanner-emulator-build .
-STEP3_END=$(date +%s)
-echo ">>> Step 3 (Build + test): $((STEP3_END - STEP3_START))s"
+echo "[1b/3] Downloading Bazel-internal dependencies..."
+BAZEL_INTERNAL_DEPS=(
+    "https://github.com/bazelbuild/java_tools/releases/download/java_v12.7/java_tools-v12.7.zip"
+    "https://github.com/bazelbuild/java_tools/releases/download/java_v12.7/java_tools_linux-v12.7.zip"
+)
+for url in "${BAZEL_INTERNAL_DEPS[@]}"; do
+    fname=$(basename "$url")
+    if [ -f "$DISTDIR/$fname" ]; then
+        echo "  HAVE: $fname"
+    else
+        echo "  GET:  $fname"
+        wget --no-check-certificate -q -O "$DISTDIR/$fname" "$url" 2>/dev/null \
+            || curl -kL --max-time 300 -o "$DISTDIR/$fname" "$url" 2>/dev/null \
+            || echo "  WARN: Failed to download $fname"
+    fi
+done
 
-# Step 4: Extract binaries
+# Step 2: Build in Docker with distdir mounted
 echo ""
-echo "[4/4] Extracting binaries..."
-STEP4_START=$(date +%s)
+echo "[2/3] Building in Docker with pre-downloaded deps..."
+docker build -f Dockerfile.offline -t spanner-emulator-build .
+
+# Step 3: Extract binaries
+echo ""
+echo "[3/3] Extracting binaries..."
 mkdir -p artifacts
 CONTAINER=$(docker create spanner-emulator-build)
 docker cp "$CONTAINER:/build/output/emulator_main" artifacts/spanner-emulator-main 2>/dev/null
+docker cp "$CONTAINER:/build/output/gateway_main" artifacts/spanner-gateway 2>/dev/null || true
 docker rm "$CONTAINER" >/dev/null
-STEP4_END=$(date +%s)
-echo ">>> Step 4 (Extract): $((STEP4_END - STEP4_START))s"
 
-BUILD_END=$(date +%s)
 echo ""
 echo "============================================"
 if [ -f artifacts/spanner-emulator-main ]; then
     echo "  BUILD SUCCESSFUL!"
-    ls -lh artifacts/spanner-emulator-main
-    file artifacts/spanner-emulator-main
+    ls -lh artifacts/
 else
     echo "  BUILD FAILED - check Docker logs"
 fi
-echo ""
-echo "  Total time: $((BUILD_END - BUILD_START))s"
-echo "  Finished: $(date)"
 echo "============================================"

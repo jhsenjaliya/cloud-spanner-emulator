@@ -19,9 +19,3 @@ build --copt   -Wno-sign-compare
 build --copt   -Wno-deprecated-declarations
 build --copt   -Wno-return-type
 build --copt   -Wno-unused-but-set-parameter
-
-# Reduce optimization on ZetaSQL AST rewrite visitors. These ~10 files each
-# take 100+ seconds and ~4GB RAM at -O3. At -O1 they compile in ~30s with ~1GB.
-# This is a dev emulator — runtime perf of these files is irrelevant.
-build --per_file_copt=+.*resolved_ast_rewrite_visitor.*\.cc@-O1
-build --per_file_copt=+.*resolved_ast_deep_copy_visitor.*\.cc@-O1
