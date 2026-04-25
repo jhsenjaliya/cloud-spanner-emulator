@@ -31,7 +31,6 @@
 #include "backend/storage/iterator.h"
 #include "backend/storage/storage.h"
 #include "leveldb/db.h"
-#include "leveldb/write_batch.h"
 
 namespace google {
 namespace spanner {
@@ -135,14 +134,6 @@ class PersistentStorage : public Storage {
       const TableID& table_id, const std::string& start_encoded,
       const std::string& limit_encoded) const
       ABSL_SHARED_LOCKS_REQUIRED(mu_);
-
-  // Removes old versions of a cell that are past the retention period.
-  // Mirrors InMemoryStorage::RemoveExpiredVersions behavior: keeps the most
-  // recent version within the retention window, deletes everything older.
-  void RemoveExpiredVersions(const std::string& cell_prefix,
-                             absl::Time timestamp,
-                             leveldb::WriteBatch* batch)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   mutable absl::Mutex mu_;
   std::unique_ptr<leveldb::DB> db_ ABSL_GUARDED_BY(mu_);

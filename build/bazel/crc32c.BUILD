@@ -2,46 +2,34 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# Generate crc32c_config.h with platform-appropriate settings.
-# ARM64 uses hardware CRC32 instructions; x86_64 uses SSE4.2.
+# Generate crc32c_config.h (normally done by CMake)
 genrule(
     name = "crc32c_config_h",
     outs = ["crc32c/crc32c_config.h"],
-    cmd = select({
-        "@platforms//cpu:aarch64": """cat > $@ << 'EOF'
+    cmd = """cat > $@ << 'EOF'
 #ifndef CRC32C_CRC32C_CONFIG_H_
 #define CRC32C_CRC32C_CONFIG_H_
+
+// Defined if the compiler has the __builtin_prefetch intrinsic.
 #define HAVE_BUILTIN_PREFETCH 1
+
+// Defined if the compiler supports __attribute__((target("...")))
 #define HAVE_MM_PREFETCH 0
+
+// Defined if the compiler supports _mm_crc32_u8 and friends (SSE4.2)
 #define HAVE_SSE42 0
+
+// Defined if the compiler supports __crc32cb and friends (ARM CRC32)
 #define HAVE_ARM64_CRC32C 1
+
+// Defined if the CRC32C tests are built with GLOG
 #define CRC32C_TESTS_BUILT_WITH_GLOG 0
+
+// Defined if the compiler supports __builtin_prefetch
 #define HAVE_STRONG_GETAUXVAL 1
+
 #endif  // CRC32C_CRC32C_CONFIG_H_
 EOF""",
-        "@platforms//cpu:x86_64": """cat > $@ << 'EOF'
-#ifndef CRC32C_CRC32C_CONFIG_H_
-#define CRC32C_CRC32C_CONFIG_H_
-#define HAVE_BUILTIN_PREFETCH 1
-#define HAVE_MM_PREFETCH 1
-#define HAVE_SSE42 1
-#define HAVE_ARM64_CRC32C 0
-#define CRC32C_TESTS_BUILT_WITH_GLOG 0
-#define HAVE_STRONG_GETAUXVAL 0
-#endif  // CRC32C_CRC32C_CONFIG_H_
-EOF""",
-        "//conditions:default": """cat > $@ << 'EOF'
-#ifndef CRC32C_CRC32C_CONFIG_H_
-#define CRC32C_CRC32C_CONFIG_H_
-#define HAVE_BUILTIN_PREFETCH 1
-#define HAVE_MM_PREFETCH 0
-#define HAVE_SSE42 0
-#define HAVE_ARM64_CRC32C 1
-#define CRC32C_TESTS_BUILT_WITH_GLOG 0
-#define HAVE_STRONG_GETAUXVAL 1
-#endif  // CRC32C_CRC32C_CONFIG_H_
-EOF""",
-    }),
 )
 
 cc_library(
@@ -49,20 +37,12 @@ cc_library(
     srcs = [
         "src/crc32c.cc",
         "src/crc32c_portable.cc",
-    ] + select({
-        "@platforms//cpu:aarch64": ["src/crc32c_arm64.cc"],
-        "@platforms//cpu:x86_64": ["src/crc32c_sse42.cc"],
-        "//conditions:default": ["src/crc32c_arm64.cc"],
-    }),
+    ],
     hdrs = [
         "include/crc32c/crc32c.h",
         ":crc32c_config_h",
     ],
-    copts = ["-DHAVE_BUILTIN_PREFETCH=1", "-DCRC32C_TESTS_BUILT_WITH_GLOG=0"] + select({
-        "@platforms//cpu:aarch64": ["-march=armv8-a+crc+crypto"],
-        "@platforms//cpu:x86_64": ["-msse4.2"],
-        "//conditions:default": [],
-    }),
+    copts = ["-DHAVE_BUILTIN_PREFETCH=1", "-DCRC32C_TESTS_BUILT_WITH_GLOG=0"],
     includes = ["include"],
     textual_hdrs = [
         "src/crc32c_arm64.h",
