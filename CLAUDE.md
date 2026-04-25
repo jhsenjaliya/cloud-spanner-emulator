@@ -27,3 +27,7 @@
 <!-- gortex:skills:end -->
 
 <!-- gortex:communities:end -->
+
+## Git Commit Rules
+
+- NEVER add `Co-Authored-By` trailers to commits
