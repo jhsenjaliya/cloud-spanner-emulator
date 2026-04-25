@@ -16,7 +16,7 @@
 #
 
 ################################################################################
-#                                     BUILD                                    #
+#                               TOOLCHAIN                                      #
 ################################################################################
 #
 # Supports two modes:
@@ -24,11 +24,14 @@
 #   Offline (distdir): docker build -f build/docker/Dockerfile.ubuntu \
 #                        --build-arg OFFLINE_DIR=bazel-distdir .
 #
-# The offline mode uses a pre-downloaded dependency directory (e.g.
-# bazel-distdir/) so Bazel skips network fetches. Useful behind corporate
-# proxies that block downloads inside Docker.
+# Build is split into three stages for optimal Docker layer caching:
+#   1. toolchain: OS packages, GCC 13, Bazel binary (rarely changes)
+#   2. deps:      Fetch external repos — ZetaSQL, protobuf, ICU, etc.
+#                  (only re-runs when WORKSPACE or build/bazel/ patches change)
+#   3. build:     Compile emulator source code
+#                  (re-runs on any source file change, but deps are cached)
 
-FROM ubuntu:22.04 AS build
+FROM ubuntu:22.04 AS toolchain
 
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
@@ -70,25 +73,64 @@ RUN mkdir -p /etc/apt/keyrings                                              && \
 
 ENV PATH=$PATH:/usr/bin:/usr/local/bin
 ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
-
-# Copy over the emulator code base into the container.
-COPY . src/
+ENV BAZEL_CXXOPTS="-std=c++17"
 
 # Install Bazel directly (not via bazelisk) to avoid x509 TLS errors in
 # restricted network environments — Go binaries like bazelisk use their own
 # cert verification which can fail behind corporate proxies.
-# In offline mode, the binary is picked from the pre-downloaded distdir.
+# Note: Bazel binary is always downloaded (~30MB, fast). Offline mode covers
+# external repo dependencies via --repository_cache in the deps/build stages.
 ARG BAZEL_VERSION=6.5.0
-ARG OFFLINE_DIR=
-RUN BAZEL_BIN="bazel-${BAZEL_VERSION}-linux-${TARGETARCH}" && \
-    if [ -n "$OFFLINE_DIR" ] && [ -f "src/${OFFLINE_DIR}/${BAZEL_BIN}" ]; then \
-      cp "src/${OFFLINE_DIR}/${BAZEL_BIN}" /usr/local/bin/bazel; \
-    else \
-      wget -q --no-check-certificate \
-        "https://releases.bazel.build/${BAZEL_VERSION}/release/${BAZEL_BIN}" \
-        -O /usr/local/bin/bazel; \
-    fi && \
+RUN wget -q --no-check-certificate \
+      "https://releases.bazel.build/${BAZEL_VERSION}/release/bazel-${BAZEL_VERSION}-linux-${TARGETARCH}" \
+      -O /usr/local/bin/bazel && \
     chmod +x /usr/local/bin/bazel
+
+################################################################################
+#                                DEPS                                          #
+################################################################################
+# Fetch all external dependencies (ZetaSQL, protobuf, ICU, gRPC, etc.).
+# This layer is cached by Docker as long as WORKSPACE and build/bazel/
+# patches don't change — which is rare compared to emulator source changes.
+
+FROM toolchain AS deps
+
+# Copy ONLY files that define external dependencies — NOT the full source tree.
+# This is the key optimization: source code changes won't invalidate this layer.
+COPY WORKSPACE .bazelrc BUILD.bazel maven_install.json .bazelversion /src/
+COPY build/bazel/ /src/build/bazel/
+
+# Fetch all external repos. Uses both the Bazel cache mount (persists across
+# Docker builds on the same daemon) and the disk cache mount (persists compiled
+# action outputs separately from Bazel's internal state).
+ARG OFFLINE_DIR=
+RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
+    --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
+    cd /src && \
+    REPO_CACHE_FLAG="" && \
+    if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
+      REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
+    fi && \
+    CC=/usr/bin/gcc CXX=/usr/bin/g++ \
+    bazel fetch ${REPO_CACHE_FLAG} \
+      @com_google_zetasql//... \
+      @com_google_absl//... \
+      @com_github_grpc_grpc//... \
+      @com_google_protobuf//...
+
+################################################################################
+#                                BUILD                                         #
+################################################################################
+# Compile emulator source code. External deps are already fetched and their
+# compiled outputs are in the disk cache mount from previous builds.
+
+FROM deps AS build
+
+# Now copy the full source tree. This invalidates Docker layer cache on any
+# code change, but the Bazel disk cache mount preserves compiled action outputs
+# for all external deps (ZetaSQL, protobuf, etc.) — only emulator code
+# recompiles.
+COPY . /src/
 
 # Build the emulator.
 # Excluding all targets from //third_party/spanner_pg/src/... from building as
@@ -99,18 +141,20 @@ RUN BAZEL_BIN="bazel-${BAZEL_VERSION}-linux-${TARGETARCH}" && \
 # via --repository_cache (sha256-addressed, includes transitive deps) instead
 # of fetching from the network.
 # BAZEL_JOBS / BAZEL_RAM: tune parallelism for constrained environments.
+ARG OFFLINE_DIR=
 ARG BAZEL_JOBS=auto
 ARG BAZEL_RAM=HOST_RAM*.67
-ENV BAZEL_CXXOPTS="-std=c++17"
 RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
-    cd src && \
+    --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
+    cd /src && \
     REPO_CACHE_FLAG="" && \
-    if [ -n "$OFFLINE_DIR" ] && [ -d "$OFFLINE_DIR" ]; then \
+    if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
       REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
     bazel build -c opt --spawn_strategy=standalone \
       --jobs=${BAZEL_JOBS} --local_ram_resources=${BAZEL_RAM} \
+      --disk_cache=/tmp/bazel-disk-cache \
       ${REPO_CACHE_FLAG} \
       -- ... -third_party/spanner_pg/src/... && \
     mkdir -p /build/output && \
@@ -120,7 +164,7 @@ RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
     strip /build/output/gateway_main
 
 # Generate licenses file.
-RUN for file in $(find -L src/bazel-src/external                               \
+RUN for file in $(find -L /src/bazel-src/external                              \
                        -name "LICENSE" -o -name "COPYING")                   ; \
     do                                                                         \
       echo "----"                                                            ; \

@@ -3,6 +3,7 @@ bazel-out
 bazel-genfiles
 bazel-testlogs
 bazel-cloud-spanner-emulator
+bazel-src
 .git
 .gitignore
 *.md
