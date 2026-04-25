@@ -121,11 +121,9 @@ RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
       REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-    bazel fetch ${REPO_CACHE_FLAG} \
-      @com_google_zetasql//... \
-      @com_google_absl//... \
-      @com_github_grpc_grpc//... \
-      @com_google_protobuf//...
+    bazel fetch ${REPO_CACHE_FLAG} @com_google_zetasql//zetasql/public:analyzer && \
+    bazel fetch ${REPO_CACHE_FLAG} @com_google_zetasql//zetasql/public:evaluator && \
+    bazel fetch ${REPO_CACHE_FLAG} @com_google_protobuf//:protobuf
 
 ################################################################################
 #                                BUILD                                         #
