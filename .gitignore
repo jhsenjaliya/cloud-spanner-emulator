@@ -3,13 +3,3 @@ bazel-cloud-spanner-emulator
 bazel-genfiles
 bazel-out
 bazel-testlogs
-bazel-distdir
-artifacts
-openspec
-*.jks
-*.pem
-.idea
-.claude
-.codex
-.DS_Store
-MODULE.bazel
