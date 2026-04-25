@@ -23,13 +23,12 @@ build --copt   -Wno-unused-but-set-parameter
 # Reduce optimization on ALL external C++ deps.
 # ZetaSQL, ICU, gRPC, protobuf compile 2-4x faster at -O1 vs -O3.
 # This is a dev emulator — runtime perf of these deps is irrelevant.
-# Bazel 6 per_file_copt matches source-relative paths (not execroot paths),
-# so patterns use repo-relative paths like zetasql/... not external/com_google_zetasql/...
-build --per_file_copt=+.*zetasql/.*\.cc@-O1
-build --per_file_copt=+.*com_google_icu/.*\.c@-O1
-build --per_file_copt=+.*com_google_icu/.*\.cc@-O1
-build --per_file_copt=+.*grpc/.*\.cc@-O1
-build --per_file_copt=+.*com_google_protobuf/.*\.cc@-O1
+# The original 4-file rules are subsumed by the blanket ZetaSQL rule.
+build --per_file_copt=+external/com_google_zetasql/.*\.cc@-O1
+build --per_file_copt=+external/com_google_icu/.*\.c@-O1
+build --per_file_copt=+external/com_google_icu/.*\.cc@-O1
+build --per_file_copt=+external/com_github_grpc_grpc/.*\.cc@-O1
+build --per_file_copt=+external/com_google_protobuf/.*\.cc@-O1
 
 # Guard against concurrent cache corruption
 build --experimental_guard_against_concurrent_changes
