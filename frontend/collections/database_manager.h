@@ -27,6 +27,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "backend/database/database.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "common/clock.h"
 #include "frontend/entities/database.h"
@@ -50,6 +51,14 @@ class DatabaseManager {
   absl::StatusOr<std::shared_ptr<Database>> CreateDatabase(
       const std::string& database_uri,
       const backend::SchemaChangeOperation& schema_change_operation)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Overload that seeds ID generators from persisted counter values.
+  // Used during restore to ensure IDs match existing data in LevelDB.
+  absl::StatusOr<std::shared_ptr<Database>> CreateDatabase(
+      const std::string& database_uri,
+      const backend::SchemaChangeOperation& schema_change_operation,
+      const backend::Database::IdCounterValues& id_counters)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   // Returns a database with the given URI.
