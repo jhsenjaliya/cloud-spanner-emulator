@@ -1,90 +1,36 @@
 #!/bin/bash
-# Build the Spanner emulator using build/docker/Dockerfile.ubuntu
-#
-# Usage:
-#   ./build.sh                                # online build (fetches deps from network)
-#   ./build.sh --offline-dir=bazel-distdir    # offline build (uses pre-downloaded deps)
-#
-# When --offline-dir is set, dependencies listed in WORKSPACE are pre-downloaded
-# into the specified directory, then passed as --build-arg OFFLINE_DIR=<dir> so
-# Bazel uses those cached archives instead of hitting the network.
+# Build the modified Spanner emulator and extract binaries
+# Run from: /Users/jsenjaliya/src/my/local_cloud_dependencies/cloud-spanner-emulator/
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-OFFLINE_DIR=""
-for arg in "$@"; do
-  case "$arg" in
-    --offline-dir=*) OFFLINE_DIR="${arg#*=}" ;;
-  esac
-done
-
-DOCKERFILE="build/docker/Dockerfile.ubuntu"
-IMAGE_TAG="spanner-emulator-build"
-
 echo "============================================"
-echo "  Building Spanner Emulator"
-if [ -n "$OFFLINE_DIR" ]; then
-  echo "  Mode: offline (distdir: $OFFLINE_DIR)"
-else
-  echo "  Mode: online"
-fi
-echo "  Started: $(date)"
+echo "  Building Modified Spanner Emulator"
+echo "  (Docker-based build for Linux binaries)"
 echo "============================================"
-BUILD_START=$(date +%s)
 
-BUILD_ARGS=""
+# Build the Docker image
+echo "[1/3] Building emulator in Docker..."
+docker build -f Dockerfile.build -t spanner-emulator-build . 2>&1 | tail -10
 
-# For offline mode, populate the distdir with deps from WORKSPACE
-if [ -n "$OFFLINE_DIR" ]; then
-  DISTDIR="$SCRIPT_DIR/$OFFLINE_DIR"
-  mkdir -p "$DISTDIR"
-
-  echo ""
-  echo "[1/3] Downloading dependencies to $OFFLINE_DIR/..."
-  grep -A2 'urls\s*=' WORKSPACE | grep -oE 'https?://[^"]+' | sort -u | while read url; do
-    fname=$(basename "$url")
-    if [ ! -f "$DISTDIR/$fname" ]; then
-      echo "  GET: $fname"
-      curl -kL --max-time 300 -o "$DISTDIR/$fname" "$url" 2>/dev/null || echo "  WARN: Failed $fname"
-    fi
-  done
-  echo "  $(ls "$DISTDIR" | wc -l | tr -d ' ') files in distdir"
-  BUILD_ARGS="--build-arg OFFLINE_DIR=$OFFLINE_DIR"
-else
-  echo ""
-  echo "[1/3] Skipping distdir (online mode)..."
-fi
-
-# Build
-echo ""
-echo "[2/3] Building emulator in Docker..."
-DOCKER_BUILDKIT=1 docker build --progress=plain \
-  -f "$DOCKERFILE" \
-  ${BUILD_ARGS:+"$BUILD_ARGS"} \
-  -t "$IMAGE_TAG" .
-
-# Extract binaries
-echo ""
-echo "[3/3] Extracting binaries..."
+# Extract binaries from the image
+echo "[2/3] Extracting binaries..."
 mkdir -p artifacts
-CONTAINER=$(docker create "$IMAGE_TAG")
-docker cp "$CONTAINER:/emulator_main" artifacts/spanner-emulator-main 2>/dev/null
-docker cp "$CONTAINER:/gateway_main" artifacts/gateway-main 2>/dev/null || true
-docker rm "$CONTAINER" >/dev/null
+CONTAINER_ID=$(docker create spanner-emulator-build)
+docker cp "$CONTAINER_ID:/build/output/emulator_main" artifacts/spanner-emulator-main
+docker rm "$CONTAINER_ID" >/dev/null
 
-BUILD_END=$(date +%s)
+echo "[3/3] Verifying..."
+ls -lh artifacts/
+file artifacts/spanner-emulator-main
+
 echo ""
 echo "============================================"
-if [ -f artifacts/spanner-emulator-main ]; then
-  echo "  BUILD SUCCESSFUL!"
-  ls -lh artifacts/spanner-emulator-main
-  file artifacts/spanner-emulator-main
-else
-  echo "  BUILD FAILED - check Docker logs"
-fi
+echo "  Build complete!"
+echo "  Binaries: $(pwd)/artifacts/"
 echo ""
-echo "  Total time: $((BUILD_END - BUILD_START))s"
-echo "  Finished: $(date)"
+echo "  To use in LocalCloud Dockerfile:"
+echo "  COPY local_cloud_dependencies/cloud-spanner-emulator/artifacts/spanner-emulator-main /usr/local/bin/"
 echo "============================================"

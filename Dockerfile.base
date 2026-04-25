@@ -1,0 +1,32 @@
+# Base image with GCC 13, corporate certs, and Bazel config
+# Rebuild only when toolchain or certs change:
+#   docker build -f Dockerfile.base -t spanner-emulator-base .
+#
+# This image is used by Dockerfile.offline as the builder base.
+
+FROM gcr.io/cloud-spanner-emulator/devcontainer
+
+# Inject corporate CA certificates via shared script
+#COPY corporate-ca.pem /tmp/corporate-ca.pem
+#COPY inject-certs.sh /tmp/inject-certs.sh
+#RUN chmod +x /tmp/inject-certs.sh && /tmp/inject-certs.sh /tmp/corporate-ca.pem
+
+# Install GCC 13 (ZetaSQL needs C++20, spanner_pg needs C23 enum:int — GCC 13 supports both)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends software-properties-common && \
+    add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gcc-13 g++-13 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130 \
+                        --slave /usr/bin/g++ g++ /usr/bin/g++-13 && \
+    rm -rf /var/lib/apt/lists/*
+
+#ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV GOPROXY=direct
+ENV GONOSUMCHECK=*
+ENV GONOSUMDB=*
+ENV GOFLAGS=-insecure
+ENV CC=gcc-13
+ENV CXX=g++-13
+
+WORKDIR /workspace
