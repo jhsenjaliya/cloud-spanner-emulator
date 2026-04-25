@@ -99,6 +99,24 @@ bazel run binaries/gateway_main
 ```
 Works on x86 and arm64 architectures.
 
+### Via Docker Hub (multi-arch)
+
+A multi-architecture Docker image (amd64 + arm64) is automatically built and
+pushed to Docker Hub on every push to `master`:
+
+```shell
+docker pull jaysen2apache/bigquery-emulator-on-duckdb:latest
+docker run -p 9010:9010 -p 9020:9020 jaysen2apache/bigquery-emulator-on-duckdb
+```
+
+You can also pin to a specific commit SHA:
+
+```shell
+docker run -p 9010:9010 -p 9020:9020 jaysen2apache/bigquery-emulator-on-duckdb:<commit-sha>
+```
+
+Works on x86 and arm64 architectures.
+
 ### Via custom docker image
 
 You can build the emulator docker image from the source root with:
