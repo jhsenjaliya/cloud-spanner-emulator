@@ -14,7 +14,6 @@
 // limitations under the License.
 //
 
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,7 +32,6 @@
 #include "backend/schema/parser/ddl_parser.h"
 #include "backend/schema/printer/print_ddl.h"
 #include "backend/schema/updater/schema_updater.h"
-#include "common/config.h"
 #include "common/errors.h"
 #include "common/feature_flags.h"
 #include "frontend/common/uris.h"
@@ -160,26 +158,6 @@ absl::Status CreateDatabase(RequestContext* ctx,
   operation->SetResponse(response_database);
   operation->ToProto(response);
 
-  // Persist metadata if data_dir is set.
-  if (auto* ms = ctx->env()->metadata_store(); ms != nullptr) {
-    std::string dialect_str =
-        dialect == database_api::DatabaseDialect::POSTGRESQL ? "POSTGRESQL"
-                                                             : "GOOGLE_STANDARD_SQL";
-    // Use PrintDDLStatements from the schema for canonical DDL (excludes
-    // CREATE DATABASE, which is handled separately by CreateDatabase).
-    std::vector<std::string> printed_ddl;
-    auto latest_schema = database->backend()->GetLatestSchema();
-    auto printed_or = backend::PrintDDLStatements(latest_schema);
-    if (printed_or.ok()) {
-      printed_ddl = *printed_or;
-    }
-    ms->AddDatabase(request->parent(), database_name, dialect_str, printed_ddl);
-    auto save_status = ms->Save();
-    if (!save_status.ok()) {
-      ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
-    }
-  }
-
   return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(DatabaseAdmin, CreateDatabase);
@@ -266,22 +244,6 @@ absl::Status UpdateDatabaseDdl(
   }
   operation->ToProto(response);
 
-  // Persist updated DDL if data_dir is set.
-  if (auto* ms = ctx->env()->metadata_store(); ms != nullptr) {
-    // Get the full DDL from the schema (not just the new statements).
-    auto latest_schema = backend_database->GetLatestSchema();
-    auto printed_or = backend::PrintDDLStatements(latest_schema);
-    if (printed_or.ok()) {
-      std::string instance_uri =
-          MakeInstanceUri(project_id, instance_id);
-      ms->UpdateDdl(instance_uri, std::string(database_id), *printed_or);
-      auto save_status = ms->Save();
-      if (!save_status.ok()) {
-        ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
-      }
-    }
-  }
-
   return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(DatabaseAdmin, UpdateDatabaseDdl);
@@ -312,36 +274,7 @@ absl::Status DropDatabase(RequestContext* ctx,
   }
 
   // Clean up the database.
-  ZETASQL_RETURN_IF_ERROR(
-      ctx->env()->database_manager()->DeleteDatabase(request->database()));
-
-  // Persist metadata and clean up LevelDB directory.
-  if (auto* ms = ctx->env()->metadata_store(); ms != nullptr) {
-    std::string instance_uri =
-        MakeInstanceUri(project_id, instance_id);
-    ms->RemoveDatabase(instance_uri, std::string(database_id));
-
-    // Delete the LevelDB directory from disk. The storage path matches
-    // database.cc: {data_dir}/{database_uri}/storage
-    std::string data_dir = config::data_dir();
-    if (!data_dir.empty()) {
-      std::string db_data_dir =
-          absl::StrCat(data_dir, "/", request->database());
-      std::error_code ec;
-      std::filesystem::remove_all(db_data_dir, ec);
-      if (ec) {
-        ABSL_LOG(WARNING) << "Failed to remove LevelDB dir " << db_data_dir
-                          << ": " << ec.message();
-      }
-    }
-
-    auto save_status = ms->Save();
-    if (!save_status.ok()) {
-      ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
-    }
-  }
-
-  return absl::OkStatus();
+  return ctx->env()->database_manager()->DeleteDatabase(request->database());
 }
 REGISTER_GRPC_HANDLER(DatabaseAdmin, DropDatabase);
 

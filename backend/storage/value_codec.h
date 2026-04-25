@@ -29,8 +29,7 @@ namespace backend {
 // Serializes a zetasql::Value to a byte string for storage in LevelDB.
 // The encoding uses a type prefix byte followed by the value bytes.
 // An invalid (unset) value is encoded as a single 0x00 byte.
-// A NULL value is encoded as 0x01 followed by a 4-byte LE type kind,
-// so that the correct typed null can be reconstructed on decode.
+// A NULL value is encoded as a single 0x01 byte.
 std::string EncodeValue(const zetasql::Value& value);
 
 // Deserializes a zetasql::Value from a byte string.

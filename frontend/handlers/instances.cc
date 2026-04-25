@@ -14,7 +14,6 @@
 // limitations under the License.
 //
 
-#include <map>
 #include <string>
 
 #include "google/longrunning/operations.pb.h"
@@ -31,9 +30,6 @@
 #include "frontend/server/handler.h"
 #include "re2/re2.h"
 #include "absl/status/status.h"
-#include "absl/strings/str_cat.h"
-#include "absl/time/time.h"
-#include "zetasql/base/logging.h"
 #include "zetasql/base/status_macros.h"
 
 namespace instance_api = ::google::spanner::admin::instance::v1;
@@ -201,23 +197,6 @@ absl::Status CreateInstance(RequestContext* ctx,
   // TODO: See discussion above, remove when the issue is fixed.
   operation->ToProto(response);
 
-  // Persist metadata if data_dir is set.
-  if (auto* ms = ctx->env()->metadata_store(); ms != nullptr) {
-    std::map<std::string, std::string> labels(
-        request->instance().labels().begin(),
-        request->instance().labels().end());
-    ms->AddInstance(instance_uri, instance_pb.display_name(),
-                    instance_pb.config(), instance_pb.processing_units(),
-                    labels,
-                    absl::FormatTime(absl::RFC3339_full,
-                                    ctx->env()->clock()->Now(),
-                                    absl::UTCTimeZone()));
-    auto save_status = ms->Save();
-    if (!save_status.ok()) {
-      ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
-    }
-  }
-
   return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(InstanceAdmin, CreateInstance);
@@ -256,16 +235,6 @@ absl::Status DeleteInstance(RequestContext* ctx,
 
   // Clean up the instance.
   ctx->env()->instance_manager()->DeleteInstance(request->name());
-
-  // Persist metadata if data_dir is set.
-  if (auto* ms = ctx->env()->metadata_store(); ms != nullptr) {
-    ms->RemoveInstance(request->name());
-    auto save_status = ms->Save();
-    if (!save_status.ok()) {
-      ABSL_LOG(ERROR) << "Failed to save metadata: " << save_status;
-    }
-  }
-
   return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(InstanceAdmin, DeleteInstance);

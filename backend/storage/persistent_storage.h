@@ -52,12 +52,6 @@ namespace backend {
 //
 // Values are serialized using value_codec.h.
 //
-// NOTE: Timestamps are encoded at microsecond precision (via
-// absl::ToUnixMicros). This matches Cloud Spanner's commit timestamp
-// resolution but differs from InMemoryStorage which preserves full
-// nanosecond precision. Two writes within the same microsecond will
-// overwrite each other.
-//
 // This class is thread-safe.
 class PersistentStorage : public Storage {
  public:

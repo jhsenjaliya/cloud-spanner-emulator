@@ -52,7 +52,6 @@ type Options struct {
 	DisableQueryNullFilteredIndexCheck             bool
 	OverrideMaxDatabasesPerInstance                int
 	OverrideChangeStreamPartitionTokenAliveSeconds int
-	DataDir                                        string
 }
 
 // Gateway implements the emulator gateway server.
@@ -70,9 +69,6 @@ func (gw *Gateway) Run() {
 	// Start the emulator grpc server and redirect its output.
 	emulatorArgs := []string{
 		"--host_port", gw.opts.FrontendAddress,
-	}
-	if gw.opts.DataDir != "" {
-		emulatorArgs = append(emulatorArgs, "--data_dir", gw.opts.DataDir)
 	}
 	if gw.opts.LogRequests {
 		emulatorArgs = append(emulatorArgs, "--log_requests")
