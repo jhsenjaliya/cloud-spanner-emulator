@@ -18,7 +18,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <filesystem>  // C++17
 #include <memory>
 #include <set>
 #include <string>
@@ -149,17 +148,6 @@ absl::StatusOr<std::unique_ptr<PersistentStorage>> PersistentStorage::Create(
   // Use a larger write buffer for better performance.
   options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
   options.max_open_files = 1000;
-
-  // Create all intermediate directories (mkdir -p equivalent).
-  // leveldb::DB::Open() with create_if_missing only creates the leaf directory,
-  // not parent directories. Without this, new databases fail with LOCK errors.
-  std::error_code ec;
-  std::filesystem::create_directories(data_dir, ec);
-  if (ec) {
-    return absl::InternalError(
-        absl::StrCat("Failed to create directory ", data_dir, ": ",
-                     ec.message()));
-  }
 
   leveldb::DB* raw_db = nullptr;
   leveldb::Status status = leveldb::DB::Open(options, data_dir, &raw_db);
