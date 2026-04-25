@@ -25,5 +25,3 @@ build --copt   -Wno-unused-but-set-parameter
 # This is a dev emulator — runtime perf of these files is irrelevant.
 build --per_file_copt=+.*resolved_ast_rewrite_visitor.*\.cc@-O1
 build --per_file_copt=+.*resolved_ast_deep_copy_visitor.*\.cc@-O1
-build --per_file_copt=+.*rewrite_subpipeline.*\.cc@-O1
-build --per_file_copt=+.*resolved_ast\.cc@-O1

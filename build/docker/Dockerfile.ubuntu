@@ -28,67 +28,46 @@
 # bazel-distdir/) so Bazel skips network fetches. Useful behind corporate
 # proxies that block downloads inside Docker.
 
-FROM ubuntu:22.04 AS build
+FROM ubuntu:18.04 AS build
 
 ARG TARGETARCH
-ENV DEBIAN_FRONTEND=noninteractive
-ENV GCC_VERSION=13
 
-# Install all build dependencies in a single layer.
-# - build-essential, curl, wget, tar, zip, unzip: bazel prerequisites
-# - python3: build scripts (python2 removed — EOL)
-# - default-jre, default-jdk: java toolchain for bazel
-# - software-properties-common, make, rename, git: build tools
-# - language-pack-en: en* locales for PG scalar functions
-# - tzdata: timezone data
-RUN apt-get update                                                          && \
-    apt-get -qq install -y --no-install-recommends                             \
-      curl tar build-essential wget python3 zip unzip                          \
-      default-jre default-jdk ca-certificates-java                             \
-      software-properties-common make rename git                               \
-      language-pack-en tzdata ca-certificates gnupg dirmngr                 && \
-    rm -rf /var/lib/apt/lists/*
+# Install prerequisites for bazel
+RUN apt-get update && apt-get -qq install curl tar build-essential wget        \
+    python python3.8 zip unzip
 
-# Unfortunately ZetaSQL has issues with clang (default bazel compiler), so
-# we install GCC 13 via the toolchain PPA.
-# We add the PPA source directly and use the signed-by approach with the key
-# fetched over HKP (port 11371) to avoid SSL issues inside Docker builds.
-RUN mkdir -p /etc/apt/keyrings                                              && \
-    gpg --keyserver hkp://keyserver.ubuntu.com:80                              \
-        --recv-keys 1E9377A2BA9EF27F                                        && \
-    gpg --export 1E9377A2BA9EF27F                                              \
-        > /etc/apt/keyrings/ubuntu-toolchain.gpg                            && \
-    echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain.gpg] http://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu jammy main" \
-      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list                && \
-    apt-get -qq update                                                      && \
-    apt-get -qq install -y --no-install-recommends                             \
-      gcc-${GCC_VERSION} g++-${GCC_VERSION}                                && \
-    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
-                        --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
-    update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION}                && \
-    rm -rf /var/lib/apt/lists/*
+# Setup java
+RUN apt-get update && apt-get -qq install -y default-jre default-jdk
 
+# Install bazel
+RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.17.0/bazelisk-linux-${TARGETARCH}
+RUN cp bazelisk-linux-${TARGETARCH} /usr/local/bin/bazel
+RUN chmod u+x /usr/local/bin/bazel
 ENV PATH=$PATH:/usr/bin:/usr/local/bin
 ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
 
+RUN apt-get update && DEBIAN_FRONTEND="noninteractive"                         \
+    TZ="America/Los_Angeles" apt-get install -y tzdata
+
+# Unfortunately ZetaSQL has issues with clang (default bazel compiler), so
+# we install GCC. Also install make for rules_foreign_cc bazel rules.
+ENV GCC_VERSION=13
+RUN apt-get -qq update                                                      && \
+    apt-get -qq install -y software-properties-common make rename  git
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test                          && \
+    apt-get -qq update                                                      && \
+    apt-get -qq install -y gcc-${GCC_VERSION} g++-${GCC_VERSION}            && \
+    apt-get -qq install -y ca-certificates libgnutls30                      && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
+                        --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
+    update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION}                && \
+    apt-get install --only-upgrade libstdc++6
+
+# Install the en* locales required for PG scalar functions.
+RUN apt-get -qq install language-pack-en
+
 # Copy over the emulator code base into the container.
 COPY . src/
-
-# Install Bazel directly (not via bazelisk) to avoid x509 TLS errors in
-# restricted network environments — Go binaries like bazelisk use their own
-# cert verification which can fail behind corporate proxies.
-# In offline mode, the binary is picked from the pre-downloaded distdir.
-ARG BAZEL_VERSION=6.5.0
-ARG OFFLINE_DIR=
-RUN BAZEL_BIN="bazel-${BAZEL_VERSION}-linux-${TARGETARCH}" && \
-    if [ -n "$OFFLINE_DIR" ] && [ -f "src/${OFFLINE_DIR}/${BAZEL_BIN}" ]; then \
-      cp "src/${OFFLINE_DIR}/${BAZEL_BIN}" /usr/local/bin/bazel; \
-    else \
-      wget -q --no-check-certificate \
-        "https://releases.bazel.build/${BAZEL_VERSION}/release/${BAZEL_BIN}" \
-        -O /usr/local/bin/bazel; \
-    fi && \
-    chmod +x /usr/local/bin/bazel
 
 # Build the emulator.
 # Excluding all targets from //third_party/spanner_pg/src/... from building as
@@ -96,22 +75,23 @@ RUN BAZEL_BIN="bazel-${BAZEL_VERSION}-linux-${TARGETARCH}" && \
 # the unused build targets will fail.
 #
 # OFFLINE_DIR: when set (e.g. "bazel-distdir"), Bazel uses pre-downloaded deps
-# via --repository_cache (sha256-addressed, includes transitive deps) instead
-# of fetching from the network.
+# from src/<OFFLINE_DIR>/ instead of fetching from the network.
 # BAZEL_JOBS / BAZEL_RAM: tune parallelism for constrained environments.
+ARG OFFLINE_DIR=
 ARG BAZEL_JOBS=auto
 ARG BAZEL_RAM=HOST_RAM*.67
 ENV BAZEL_CXXOPTS="-std=c++17"
 RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
+    --mount=type=cache,target=/root/.cache/bazelisk,id=bazelisk-cache \
     cd src && \
-    REPO_CACHE_FLAG="" && \
+    DISTDIR_FLAG="" && \
     if [ -n "$OFFLINE_DIR" ] && [ -d "$OFFLINE_DIR" ]; then \
-      REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
+      DISTDIR_FLAG="--distdir=/src/${OFFLINE_DIR}"; \
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
     bazel build -c opt --spawn_strategy=standalone \
       --jobs=${BAZEL_JOBS} --local_ram_resources=${BAZEL_RAM} \
-      ${REPO_CACHE_FLAG} \
+      ${DISTDIR_FLAG} \
       -- ... -third_party/spanner_pg/src/... && \
     mkdir -p /build/output && \
     cp -L bazel-bin/binaries/emulator_main /build/output/ && \
