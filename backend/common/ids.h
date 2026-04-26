@@ -57,7 +57,7 @@ class UniqueIdGenerator {
   }
 
  private:
-  absl::Mutex mu_;
+  mutable absl::Mutex mu_;
   int64_t next_seq_ ABSL_GUARDED_BY(mu_);
 };
 
