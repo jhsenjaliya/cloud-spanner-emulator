@@ -321,14 +321,18 @@ std::unique_ptr<zetasql::Function> TokenizeFullTextFunction(
     ABSL_LOG(FATAL) << "Fail to make ARRAY<STRING> or ARRAY<BYTE> types.";
   }
 
+  const zetasql::Type* bool_type = type_factory->get_bool();
+
   // Signature: TOKENIZE_FULLTEXT(string|array[string] value,
   //                              string language_tag = NULL,
   //                              string content_type = "text/plain",
-  //                              string token_category = NULL)
+  //                              string token_category = NULL,
+  //                              bool remove_diacritics = false)
   const zetasql::FunctionArgumentTypeList tokenize_fulltext_args = {
       {string_type, GetNamedOptionalArgTypeOptions("language_tag", false)},
       {string_type, GetNamedOptionalArgTypeOptions("content_type")},
       {string_type, GetNamedOptionalArgTypeOptions("token_category")},
+      {bool_type, GetNamedOptionalArgTypeOptions("remove_diacritics")},
   };
   zetasql::FunctionArgumentTypeList string_arg_type_list = {
       {string_type, GetRequiredArgumentTypeOptions("value", false)}};
