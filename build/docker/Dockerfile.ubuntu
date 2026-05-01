@@ -114,9 +114,8 @@ FROM toolchain AS deps
 COPY WORKSPACE .bazelrc BUILD.bazel maven_install.json .bazelversion /src/
 COPY build/bazel/ /src/build/bazel/
 
-# Fetch all external repos. Uses both the Bazel cache mount (persists across
-# Docker builds on the same daemon) and the disk cache mount (persists compiled
-# action outputs separately from Bazel's internal state).
+# Fetch and build heavy external dependencies to leverage Docker layer caching
+# for compiled objects. Uses both the Bazel cache mount and the disk cache.
 ARG OFFLINE_DIR=
 RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
     --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
@@ -126,9 +125,9 @@ RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
       REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-    bazel fetch ${REPO_CACHE_FLAG} @com_google_zetasql//zetasql/public:analyzer && \
-    bazel fetch ${REPO_CACHE_FLAG} @com_google_zetasql//zetasql/public:evaluator && \
-    bazel fetch ${REPO_CACHE_FLAG} @com_google_protobuf//:protobuf
+    bazel build -c opt --disk_cache=/tmp/bazel-disk-cache ${REPO_CACHE_FLAG} \
+      @com_google_zetasql//zetasql/public:analyzer \
+      @com_google_protobuf//:protobuf
 
 ################################################################################
 #                                BUILD                                         #
@@ -175,15 +174,16 @@ RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
     strip /build/output/emulator_main && \
     strip /build/output/gateway_main
 
-# Generate licenses file.
-RUN for file in $(find -L /src/bazel-src/external                              \
-                       -name "LICENSE" -o -name "COPYING")                   ; \
-    do                                                                         \
-      echo "----"                                                            ; \
-      echo $file                                                             ; \
-      echo "----"                                                            ; \
-      cat $file                                                              ; \
-    done > licenses.txt                                                     && \
+# Generate licenses file. Robustly find external dependency licenses.
+RUN BAZEL_OUT=$(bazel info output_base) && \
+    for file in $(find -L ${BAZEL_OUT}/external \
+                       -name "LICENSE" -o -name "COPYING" 2>/dev/null) ; \
+    do \
+      echo "----" ; \
+      echo $file ; \
+      echo "----" ; \
+      cat $file ; \
+    done > licenses.txt && \
     gzip licenses.txt
 
 ################################################################################
