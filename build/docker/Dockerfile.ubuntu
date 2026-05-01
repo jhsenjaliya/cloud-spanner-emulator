@@ -54,17 +54,9 @@ RUN apt-get update                                                          && \
 
 # Unfortunately ZetaSQL has issues with clang (default bazel compiler), so
 # we install GCC 13 via the toolchain PPA.
-# We add the PPA source directly and use the signed-by approach with the key
-# fetched over HKP (port 11371) to avoid SSL issues inside Docker builds.
-RUN mkdir -p /etc/apt/keyrings                                              && \
-    gpg --keyserver hkp://keyserver.ubuntu.com:80                              \
-        --recv-keys 1E9377A2BA9EF27F                                        && \
-    gpg --export 1E9377A2BA9EF27F                                              \
-        > /etc/apt/keyrings/ubuntu-toolchain.gpg                            && \
-    echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain.gpg] http://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu jammy main" \
-      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list                && \
-    apt-get -qq update                                                      && \
-    apt-get -qq install -y --no-install-recommends                             \
+RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y                       && \
+    apt-get update                                                          && \
+    apt-get install -y --no-install-recommends                                 \
       gcc-${GCC_VERSION} g++-${GCC_VERSION}                                && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
                         --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
