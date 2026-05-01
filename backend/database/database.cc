@@ -80,14 +80,13 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
   // Seed ID generators from persisted values so that restored schemas get
   // the same table/column IDs that were used to write data to LevelDB.
   if (id_counters.table_id > 0) {
-    database->table_id_generator_ = TableIDGenerator(id_counters.table_id);
+    database->table_id_generator_.Seed(id_counters.table_id);
   }
   if (id_counters.column_id > 0) {
-    database->column_id_generator_ = ColumnIDGenerator(id_counters.column_id);
+    database->column_id_generator_.Seed(id_counters.column_id);
   }
   if (id_counters.change_stream_id > 0) {
-    database->change_stream_id_generator_ =
-        ChangeStreamIDGenerator(id_counters.change_stream_id);
+    database->change_stream_id_generator_.Seed(id_counters.change_stream_id);
   }
 
   std::string data_dir = config::data_dir();

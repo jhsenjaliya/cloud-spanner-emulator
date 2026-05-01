@@ -56,6 +56,12 @@ class UniqueIdGenerator {
     return next_seq_;
   }
 
+  // Seeds the generator with a starting sequence value.
+  void Seed(int64_t starting_seq) ABSL_LOCKS_EXCLUDED(mu_) {
+    absl::MutexLock lock(&mu_);
+    next_seq_ = starting_seq;
+  }
+
  private:
   mutable absl::Mutex mu_;
   int64_t next_seq_ ABSL_GUARDED_BY(mu_);
