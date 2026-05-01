@@ -45,7 +45,7 @@ ENV GCC_VERSION=13
 # - language-pack-en: en* locales for PG scalar functions
 # - tzdata: timezone data
 RUN apt-get update                                                          && \
-    apt-get -qq install -y --no-install-recommends                             \
+    apt-get install -y --no-install-recommends                                 \
       curl tar build-essential wget python3 zip unzip                          \
       default-jre default-jdk ca-certificates-java                             \
       software-properties-common make rename git                               \
@@ -54,7 +54,11 @@ RUN apt-get update                                                          && \
 
 # Unfortunately ZetaSQL has issues with clang (default bazel compiler), so
 # we install GCC 13 via the toolchain PPA.
-RUN add-apt-repository ppa:ubuntu-toolchain-r/test -y                       && \
+# Use curl to fetch the key over HTTPS for better reliability in CI.
+RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x1E9377A2BA9EF27F" \
+    | gpg --dearmor -o /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg        && \
+    echo "deb http://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu jammy main" \
+    > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list                  && \
     apt-get update                                                          && \
     apt-get install -y --no-install-recommends                                 \
       gcc-${GCC_VERSION} g++-${GCC_VERSION}                                && \
