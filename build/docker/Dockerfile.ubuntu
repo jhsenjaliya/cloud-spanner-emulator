@@ -44,28 +44,25 @@ ENV GCC_VERSION=13
 # - software-properties-common, make, rename, git: build tools
 # - language-pack-en: en* locales for PG scalar functions
 # - tzdata: timezone data
-RUN apt-get update                                                          && \
-    apt-get install -y --no-install-recommends                                 \
-      curl tar build-essential wget python3 zip unzip                          \
-      default-jre default-jdk ca-certificates-java                             \
-      software-properties-common make rename git                               \
-      language-pack-en tzdata ca-certificates gnupg dirmngr                 && \
-    rm -rf /var/lib/apt/lists/*
-
-# Unfortunately ZetaSQL has issues with clang (default bazel compiler), so
-# we install GCC 13 via the toolchain PPA.
-# Use curl to fetch the key over HTTPS for better reliability in CI.
-RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x1E9377A2BA9EF27F" \
-    | gpg --dearmor -o /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg        && \
-    echo "deb http://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu jammy main" \
-    > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list                  && \
-    apt-get update                                                          && \
-    apt-get install -y --no-install-recommends                                 \
-      gcc-${GCC_VERSION} g++-${GCC_VERSION}                                && \
+# Install all build dependencies and GCC 13 in a single layer for robustness.
+# We use GCC 13 because ZetaSQL has known issues with Clang in this environment.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      curl tar build-essential wget python3 zip unzip \
+      default-jre default-jdk ca-certificates-java \
+      software-properties-common make rename git \
+      language-pack-en tzdata ca-certificates gnupg dirmngr && \
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors \
+      "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x1E9377A2BA9EF27F" \
+      | gpg --dearmor > /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg && \
+    echo "deb https://ppa.launchpad.net/ubuntu-toolchain-r/test/ubuntu jammy main" \
+      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
                         --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
-    update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION}                && \
-    rm -rf /var/lib/apt/lists/*
+    update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION} && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV PATH=$PATH:/usr/bin:/usr/local/bin
 ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
