@@ -50,7 +50,7 @@ namespace postgres_translator {
 namespace {
 
 static zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
-    kCatalogManualRegistration({
+    kCatalogManualRegistration(absl::flat_hash_set<std::string>({
         "pg.array_all_equal",
         "pg.array_all_greater",
         "pg.array_all_greater_equal",
@@ -79,7 +79,7 @@ static zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
         "pg.to_timestamp",
         // Registered through substr
         "pg.substring",
-    });
+    }));
 
 // Returns `true` if all flags are enabled. Returns `false`, otherwise.
 absl::StatusOr<bool> IsEnabledInCatalog(

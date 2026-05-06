@@ -90,7 +90,8 @@ static const ConversionMap& GetConversionMap() {
   static const zetasql::Type* gsql_pg_numeric =
       spangres::datatypes::GetPgNumericType();
 
-  static const zetasql_base::NoDestructor<ConversionMap> kConversionMap({
+  static const zetasql_base::NoDestructor<ConversionMap> kConversionMap(
+      ConversionMap({
       // PG.JSONB -> <TYPE>
       {{gsql_pg_jsonb, gsql_bool}, PgJsonbToBoolConversion},
       {{gsql_pg_jsonb, gsql_double}, PgJsonbToDoubleConversion},
@@ -98,7 +99,7 @@ static const ConversionMap& GetConversionMap() {
       {{gsql_pg_jsonb, gsql_int64}, PgJsonbToInt64Conversion},
       {{gsql_pg_jsonb, gsql_pg_numeric}, PgJsonbToPgNumericConversion},
       {{gsql_pg_jsonb, gsql_string}, PgJsonbToStringConversion},
-  });
+  }));
   return *kConversionMap;
 }
 

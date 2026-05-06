@@ -6,8 +6,9 @@
 #
 set -euo pipefail
 
-WORKSPACE="/Users/jsenjaliya/src/my/local_cloud_dependencies/cloud-spanner-emulator/WORKSPACE"
-DISTDIR="/Users/jsenjaliya/src/my/local_cloud_dependencies/cloud-spanner-emulator/bazel-distdir/content_addressable/sha256"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE="${SCRIPT_DIR}/WORKSPACE"
+DISTDIR="${SCRIPT_DIR}/bazel-distdir/content_addressable/sha256"
 
 # We need to resolve .format() template strings used in the WORKSPACE.
 # Extract known version variables first.

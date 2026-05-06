@@ -31,45 +31,38 @@
 #   3. build:     Compile emulator source code
 #                  (re-runs on any source file change, but deps are cached)
 
-FROM ubuntu:22.04 AS toolchain
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE} AS toolchain
 
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
-ENV GCC_VERSION=13
-
-# Install all build dependencies in a single layer.
-# - build-essential, curl, wget, tar, zip, unzip: bazel prerequisites
-# - python3: build scripts (python2 removed — EOL)
-# - default-jre, default-jdk: java toolchain for bazel
-# - software-properties-common, make, rename, git: build tools
-ENV DEBIAN_FRONTEND=noninteractive
 ENV GCC_VERSION=12
 
-# Install all build dependencies and GCC in a single layer for robustness.
-# We use GCC 12 because it is available in the official Jammy repositories,
-# avoiding the need for unreliable PPAs in CI environments.
-RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-      curl tar build-essential wget python3 zip unzip \
-      default-jre default-jdk ca-certificates-java \
-      software-properties-common make rename git \
-      language-pack-en tzdata ca-certificates gnupg dirmngr \
-      gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
-    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
-                        --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
-    update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION} && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install all build dependencies and GCC in a single layer.
+# Skipped when using a pre-built base image (Dockerfile.base).
+ARG OFFLINE_DIR=
+RUN if [ ! -f /.toolchain-ready ]; then \
+      echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends \
+        curl tar build-essential wget python3 zip unzip \
+        default-jre default-jdk ca-certificates-java \
+        software-properties-common make rename git \
+        language-pack-en tzdata ca-certificates gnupg dirmngr \
+        libssl-dev zlib1g-dev libtinfo5 \
+        gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
+      update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
+                          --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
+      update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION} && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 ENV PATH=$PATH:/usr/bin:/usr/local/bin
 ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
 ENV BAZEL_CXXOPTS="-std=c++17"
 
 # Install Bazel directly (not via bazelisk) to avoid x509 TLS errors in
-# restricted network environments — Go binaries like bazelisk use their own
-# cert verification which can fail behind corporate proxies.
-# In offline mode, the binary is picked from the pre-downloaded distdir.
-# When OFFLINE_DIR is empty, .bazelversion is copied as a harmless no-op
-# placeholder so the COPY instruction doesn't fail.
+# restricted network environments.
 ARG BAZEL_VERSION=6.5.0
 ARG OFFLINE_DIR=
 COPY ${OFFLINE_DIR:-.bazelversion} /tmp/bazel-source/
@@ -94,67 +87,65 @@ RUN case "${TARGETARCH}" in \
 ################################################################################
 # Fetch all external dependencies (ZetaSQL, protobuf, ICU, gRPC, etc.).
 # This layer is cached by Docker as long as WORKSPACE and build/bazel/
-# patches don't change — which is rare compared to emulator source changes.
+# patches don't change.
 
 FROM toolchain AS deps
 
-# Copy ONLY files that define external dependencies — NOT the full source tree.
-# This is the key optimization: source code changes won't invalidate this layer.
+# Copy ONLY files that define external dependencies and the graph structure.
 COPY WORKSPACE .bazelrc BUILD.bazel maven_install.json .bazelversion /src/
 COPY build/bazel/ /src/build/bazel/
+# If build_files.tar exists (created by build.sh), extract it.
+# Otherwise, we continue with just the root files.
+COPY build_files.tar* /src/
+RUN if [ -f /src/build_files.tar ]; then \
+      tar -xf /src/build_files.tar -C /src/ && rm /src/build_files.tar; \
+    fi
 
-# Fetch and build heavy external dependencies to leverage Docker layer caching
-# for compiled objects. Uses both the Bazel cache mount and the disk cache.
+# Copy offline distdir into the image when OFFLINE_DIR is set.
+# Falls back to copying a harmless file (WORKSPACE) when offline mode is not used.
+COPY ${OFFLINE_DIR:-WORKSPACE} /src/${OFFLINE_DIR:-WORKSPACE}
+
+# Fetch external dependencies. We save the repo cache into the image layer
+# so it is persisted by GHA's Docker layer caching.
 ARG OFFLINE_DIR=
-RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
-    --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
+RUN --mount=type=cache,target=/bazel-disk-cache \
+    mkdir -p /bazel-repo-cache /bazel-disk-cache && \
     cd /src && \
     REPO_CACHE_FLAG="" && \
     if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
       REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
+    else \
+      REPO_CACHE_FLAG="--repository_cache=/bazel-repo-cache"; \
     fi && \
-    CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-    bazel build -c opt --disk_cache=/tmp/bazel-disk-cache ${REPO_CACHE_FLAG} \
-      @com_google_zetasql//zetasql/public:analyzer \
-      @com_google_protobuf//:protobuf
+    bazel fetch ${REPO_CACHE_FLAG} //binaries:emulator_main //binaries:gateway_main
 
 ################################################################################
 #                                BUILD                                         #
 ################################################################################
-# Compile emulator source code. External deps are already fetched and their
-# compiled outputs are in the disk cache mount from previous builds.
+# Compile emulator source code.
 
 FROM deps AS build
 
-# Now copy the full source tree. This invalidates Docker layer cache on any
-# code change, but the Bazel disk cache mount preserves compiled action outputs
-# for all external deps (ZetaSQL, protobuf, etc.) — only emulator code
-# recompiles.
+# Now copy the full source tree.
 COPY . /src/
 
 # Build the emulator.
-# Excluding all targets from //third_party/spanner_pg/src/... from building as
-# not all the targets from the PostgreSQL source needs to be built and some of
-# the unused build targets will fail.
-#
-# OFFLINE_DIR: when set (e.g. "bazel-distdir"), Bazel uses pre-downloaded deps
-# via --repository_cache (sha256-addressed, includes transitive deps) instead
-# of fetching from the network.
-# BAZEL_JOBS / BAZEL_RAM: tune parallelism for constrained environments.
+# We reuse the repository and disk caches.
 ARG OFFLINE_DIR=
-ARG BAZEL_JOBS=4
-ARG BAZEL_RAM=HOST_RAM*.5
-RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
-    --mount=type=cache,target=/tmp/bazel-disk-cache,id=bazel-disk-cache \
+ARG BAZEL_JOBS=1
+ARG BAZEL_RAM=HOST_RAM*.2
+RUN --mount=type=cache,target=/bazel-disk-cache \
     cd /src && \
     REPO_CACHE_FLAG="" && \
     if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
       REPO_CACHE_FLAG="--repository_cache=/src/${OFFLINE_DIR}"; \
+    else \
+      REPO_CACHE_FLAG="--repository_cache=/bazel-repo-cache"; \
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-    bazel build -c opt --spawn_strategy=standalone \
+    bazel build -c dbg --strip=always --spawn_strategy=standalone \
       --jobs=${BAZEL_JOBS} --local_ram_resources=${BAZEL_RAM} \
-      --disk_cache=/tmp/bazel-disk-cache \
+      --disk_cache=/bazel-disk-cache \
       ${REPO_CACHE_FLAG} \
       -- ... -third_party/spanner_pg/src/... && \
     mkdir -p /build/output && \
@@ -164,7 +155,8 @@ RUN --mount=type=cache,target=/root/.cache/bazel,id=bazel-cache \
     strip /build/output/gateway_main
 
 # Generate licenses file. Robustly find external dependency licenses.
-RUN BAZEL_OUT=$(bazel info output_base) && \
+RUN cd /src && \
+    BAZEL_OUT=$(bazel info output_base) && \
     for file in $(find -L ${BAZEL_OUT}/external \
                        -name "LICENSE" -o -name "COPYING" 2>/dev/null) ; \
     do \
@@ -172,8 +164,8 @@ RUN BAZEL_OUT=$(bazel info output_base) && \
       echo $file ; \
       echo "----" ; \
       cat $file ; \
-    done > licenses.txt && \
-    gzip licenses.txt
+    done > /build/output/licenses.txt && \
+    gzip /build/output/licenses.txt
 
 ################################################################################
 #                                   RELEASE                                    #
@@ -192,7 +184,7 @@ COPY --from=build /usr/lib/x86_64-linux-gnu*/libstdc++.so.6 /usr/lib/x86_64-linu
 COPY --from=build /usr/lib/aarch64-linux-gnu*/libstdc++.so.6 /usr/lib/aarch64-linux-gnu
 
 # Copy licenses
-COPY --from=build /licenses.txt.gz .
+COPY --from=build /build/output/licenses.txt.gz .
 
 # Expose the default ports 9010 (gRPC) and 9020 (REST)
 EXPOSE 9010 9020

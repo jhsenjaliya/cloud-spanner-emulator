@@ -37,13 +37,25 @@ BUILD_START=$(date +%s)
 
 BUILD_ARGS=()
 
+BASE_IMAGE="ubuntu:22.04"
+
 # For offline mode, use bazel fetch to populate the repository cache
 if [ -n "$OFFLINE_DIR" ]; then
   DISTDIR="$SCRIPT_DIR/$OFFLINE_DIR"
   mkdir -p "$DISTDIR"
 
+  # Check if pre-built base image exists locally (required for fully offline builds)
+  BASE_IMAGE="spanner-emulator-base:latest"
+  if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+    echo ""
+    echo "[0/4] Building pre-baked base image (requires network)..."
+    DOCKER_BUILDKIT=1 docker build \
+      -f build/docker/Dockerfile.base \
+      -t "$BASE_IMAGE" .
+  fi
+
   echo ""
-  echo "[1/3] Populating repository cache in $OFFLINE_DIR/..."
+  echo "[1/4] Populating repository cache in $OFFLINE_DIR/..."
 
   # Pre-download the Bazel binary itself so Docker doesn't need network for it
   BAZEL_VERSION=$(cat .bazelversion | tr -d '[:space:]')
@@ -72,8 +84,12 @@ if [ -n "$OFFLINE_DIR" ]; then
     echo "  Install bazel/bazelisk to enable full offline builds."
   fi
 
-  echo "  $(find "$DISTDIR" -type f | wc -l | tr -d ' ') files in repo cache"
+  echo "  Creating BUILD files manifest..."
+  find . -name "BUILD*" -o -name "*.bzl" -o -name "WORKSPACE*" -o -name "*.json" -o -name ".bazelversion" -o -name ".bazelrc" \
+    | grep -v "bazel-" > build_files.txt
+  tar -cf build_files.tar -T build_files.txt
   BUILD_ARGS+=(--build-arg "OFFLINE_DIR=$OFFLINE_DIR")
+  BUILD_ARGS+=(--build-arg "BASE_IMAGE=$BASE_IMAGE")
 else
   echo ""
   echo "[1/3] Skipping repo cache (online mode)..."
@@ -81,15 +97,31 @@ fi
 
 # Build
 echo ""
-echo "[2/3] Building emulator in Docker..."
+if [ -n "$OFFLINE_DIR" ]; then
+  echo "[2/4] Building emulator in Docker..."
+else
+  echo "[2/3] Building emulator in Docker..."
+fi
+
+# Auto-detect cores for parallelism if not set
+if [ -z "$BAZEL_JOBS" ]; then
+  BAZEL_JOBS=4
+fi
+
 DOCKER_BUILDKIT=1 docker build --progress=plain \
   -f "$DOCKERFILE" \
   "${BUILD_ARGS[@]}" \
+  --build-arg BAZEL_JOBS="$BAZEL_JOBS" \
+  --build-arg BAZEL_RAM="HOST_RAM*.5" \
   -t "$IMAGE_TAG" .
 
 # Extract binaries
 echo ""
-echo "[3/3] Extracting binaries..."
+if [ -n "$OFFLINE_DIR" ]; then
+  echo "[3/4] Extracting binaries..."
+else
+  echo "[3/3] Extracting binaries..."
+fi
 mkdir -p artifacts
 CONTAINER=$(docker create "$IMAGE_TAG")
 docker cp "$CONTAINER:/emulator_main" artifacts/spanner-emulator-main 2>/dev/null

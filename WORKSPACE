@@ -19,6 +19,29 @@ workspace(name = "com_google_cloud_spanner_emulator")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
+    name = "rules_java",
+    sha256 = "ac0757f2feca4a9c6ba9dd3d4858bbfccb019d7c48e725f76a14ddef673f728c",
+    urls = ["https://github.com/bazelbuild/rules_java/archive/refs/tags/7.12.3.tar.gz"],
+    strip_prefix = "rules_java-7.12.3",
+)
+
+http_archive(
+    name = "rules_ruby",
+    sha256 = "6901867c646092049e29a1b147986791694d89a42be7e07624c653609801127a",
+    strip_prefix = "rules_ruby-0.6.0",
+    urls = ["https://github.com/bazelbuild/rules_ruby/archive/refs/tags/v0.6.0.tar.gz"],
+)
+
+http_archive(
+    name = "rules_license",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_license/releases/download/0.0.7/rules_license-0.0.7.tar.gz",
+        "https://github.com/bazelbuild/rules_license/releases/download/0.0.7/rules_license-0.0.7.tar.gz",
+    ],
+    sha256 = "4531deccb913639c30e5c7512a054d5d875698daeb75d8cf90f284375fe7c360",
+)
+
+http_archive(
     name = "google_bazel_common",
     sha256 = "82a49fb27c01ad184db948747733159022f9464fc2e62da996fa700594d9ea42",
     strip_prefix = "bazel-common-2a6b6406e12208e02b2060df0631fb30919080f3",
@@ -310,6 +333,7 @@ http_archive(
 
 http_archive(
     name = "com_google_protobuf",
+    repo_mapping = {"@protobuf": "@com_google_protobuf"},
     sha256 = "79cc6d09d02706c5a73e900ea842b5b3dae160f371b6654774947fe781851423",
     strip_prefix = "protobuf-27.5",
     urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v27.5/protobuf-27.5.tar.gz"],

@@ -649,3 +649,32 @@ index 6956e63..aae162f 100644
          rows_to_insert.erase(rows_to_insert.begin() + rows_ignored_indexes[i]);
        }
      }
+
+diff --git a/zetasql/public/types/type.h b/zetasql/public/types/type.h
+index 1234567..89abcde 100644
+--- a/zetasql/public/types/type.h
++++ b/zetasql/public/types/type.h
+@@ -670,6 +670,8 @@
+   // Applicable to ProtoType only, used from ArrayType::EqualElementMultiSet and
+   // other call sites that depend on hashing.
+   // Returns true if the ProtoType has any floating point fields.
+   // Always returns false for instances which are not ProtoType.
++ public:
+   virtual bool HasFloatingPointFields() const;
++ protected:
+ 
+   // Internal implementation for Serialize methods.  This will append
+
+diff --git a/zetasql/public/value_inl.h b/zetasql/public/value_inl.h
+index 1234567..89abcde 100644
+--- a/zetasql/public/value_inl.h
++++ b/zetasql/public/value_inl.h
+@@ -1166,7 +1166,7 @@
+   bool is_null() const { return type_ & kIsNullTag; }
+   bool preserves_order() const { return type_ & kPreserverOrderTag; }
+   bool has_type_pointer() const { return type_ & kHasTypeTag; }
+-  uint64_t raw_type() const { return type_; }
++  constexpr uint64_t raw_type() const { return type_; }
+ 
+   friend constexpr Value::Metadata::Metadata(TypeKind kind, bool is_null,
+                                              bool preserves_order,

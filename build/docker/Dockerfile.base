@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+#
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Pre-built base image with all OS-level toolchain dependencies.
+# Build once when you have network, then use for offline builds:
+#   docker build -f build/docker/Dockerfile.base -t spanner-emulator-base:latest .
+#
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GCC_VERSION=12
+
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      curl tar build-essential wget python3 zip unzip \
+      default-jre default-jdk ca-certificates-java \
+      software-properties-common make rename git \
+      language-pack-en tzdata ca-certificates gnupg dirmngr \
+      libssl-dev zlib1g-dev libtinfo5 \
+      gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
+                        --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
+    update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION} && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=$PATH:/usr/bin:/usr/local/bin
+ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
+ENV BAZEL_CXXOPTS="-std=c++17"
+
+# Marker to signal this is a pre-baked base with toolchain already installed
+RUN touch /.toolchain-ready

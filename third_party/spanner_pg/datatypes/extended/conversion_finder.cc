@@ -114,7 +114,7 @@ static const ConversionMap& GetConversionMap() {
       spangres::datatypes::GetPgOidType();
 
   static const zetasql_base::NoDestructor<ConversionMap> kConversionMap(
-      {// PG.NUMERIC -> PG.NUMERIC conversion (fixed-precision cast)
+      ConversionMap({// PG.NUMERIC -> PG.NUMERIC conversion (fixed-precision cast)
        {{gsql_pg_numeric, gsql_pg_numeric},
         {CastFunctionProperty(CastFunctionType::EXPLICIT, /*coercion_cost=*/0),
          GetGenericConversionFunction()}},
@@ -182,7 +182,7 @@ static const ConversionMap& GetConversionMap() {
          GetPgOidToInt64Conversion()}},
        {{gsql_pg_oid, gsql_string},
         {CastFunctionProperty(CastFunctionType::EXPLICIT, /*coercion_cost=*/0),
-         GetPgOidToStringConversion()}}});
+         GetPgOidToStringConversion()}})));
   return *kConversionMap;
 }
 
