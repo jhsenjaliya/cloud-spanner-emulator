@@ -39,6 +39,7 @@ build --per_file_copt=+.*resolved_ast_rewrite_visitor.*\.cc@-O0
 build --per_file_copt=+.*resolved_ast_deep_copy_visitor.*\.cc@-O0
 build --per_file_copt=+.*generalized_query_stmt_rewriter.*\.cc@-O0
 build --per_file_copt=+.*rewrite_subpipeline.*\.cc@-O0
+build --per_file_copt=+.*order_by_and_limit_in_aggregate_rewriter.*\.cc@-O0
 build --per_file_copt=+.*resolved_ast\.cc@-O0
 
 # Guard against concurrent cache corruption

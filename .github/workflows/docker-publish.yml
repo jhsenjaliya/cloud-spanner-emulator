@@ -18,8 +18,10 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
+            jobs: 4
           - platform: linux/arm64
             runner: ubuntu-latest-arm
+            jobs: 8
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
 
@@ -54,8 +56,8 @@ jobs:
           cache-from: type=gha,scope=build-${{ matrix.platform }}
           cache-to: type=gha,scope=build-${{ matrix.platform }},mode=max
           build-args: |
-            BAZEL_JOBS=4
-            BAZEL_RAM=HOST_RAM*.67
+            BAZEL_JOBS=${{ matrix.jobs }}
+            BAZEL_RAM=HOST_RAM*.8
 
       - name: Export digest
         run: |
